@@ -1,4 +1,3 @@
-
 <?php
 session_start();
 require_once '../config/database.php';
@@ -16,13 +15,9 @@ $editProduct = null;
 // NOTIFICATIONS
 if (isset($_GET['added'])) {
     $message = "Product added successfully!";
-}
-
-if (isset($_GET['updated'])) {
+} elseif (isset($_GET['updated'])) {
     $message = "Product updated successfully!";
-}
-
-if (isset($_GET['deleted'])) {
+} elseif (isset($_GET['deleted'])) {
     $message = "Product deleted successfully!";
 }
 
@@ -71,7 +66,6 @@ if (
                 header("Location: products.php?added=1");
                 exit;
             }
-
         } catch (PDOException $e) {
             $message = "Unable to add product.";
             $messageType = "error";
@@ -101,26 +95,35 @@ if (
         $messageType = "error";
     } else {
         try {
-            $stmt = $conn->prepare(
-                "UPDATE products
-                 SET category_id = ?,
-                     product_name = ?,
-                     description = ?,
-                     price = ?
-                 WHERE product_id = ?"
+            $check = $conn->prepare(
+                "SELECT COUNT(*) FROM categories WHERE category_id = ?"
             );
+            $check->execute([$category]);
 
-            $stmt->execute([
-                $category,
-                $name,
-                $description,
-                (float)$price,
-                $id
-            ]);
+            if (!$check->fetchColumn()) {
+                $message = "Selected category does not exist.";
+                $messageType = "error";
+            } else {
+                $stmt = $conn->prepare(
+                    "UPDATE products
+                     SET category_id = ?,
+                         product_name = ?,
+                         description = ?,
+                         price = ?
+                     WHERE product_id = ?"
+                );
 
-            header("Location: products.php?updated=1");
-            exit;
+                $stmt->execute([
+                    $category,
+                    $name,
+                    $description,
+                    (float)$price,
+                    $id
+                ]);
 
+                header("Location: products.php?updated=1");
+                exit;
+            }
         } catch (PDOException $e) {
             $message = "Unable to update product.";
             $messageType = "error";
@@ -136,13 +139,17 @@ if (
     $id = (int)($_POST['product_id'] ?? 0);
 
     try {
-        // CHECK IF PRODUCT HAS SALES RECORDS
+        if ($id <= 0) {
+            throw new Exception("Invalid product.");
+        }
+
+        // CHECK SALES RECORDS
         $checkSales = $conn->prepare(
             "SELECT COUNT(*) FROM sale_details WHERE product_id = ?"
         );
         $checkSales->execute([$id]);
 
-        // CHECK IF PRODUCT HAS STOCK MOVEMENTS
+        // CHECK STOCK MOVEMENTS
         $checkMovements = $conn->prepare(
             "SELECT COUNT(*) FROM stock_movements WHERE product_id = ?"
         );
@@ -157,13 +164,13 @@ if (
         } else {
             $conn->beginTransaction();
 
-            // REMOVE INVENTORY RECORD FIRST
+            // DELETE INVENTORY RECORD FIRST
             $deleteInventory = $conn->prepare(
                 "DELETE FROM inventory WHERE product_id = ?"
             );
             $deleteInventory->execute([$id]);
 
-            // REMOVE PRODUCT
+            // DELETE PRODUCT
             $deleteProduct = $conn->prepare(
                 "DELETE FROM products WHERE product_id = ?"
             );
@@ -174,7 +181,13 @@ if (
             header("Location: products.php?deleted=1");
             exit;
         }
+    } catch (Exception $e) {
+        if ($conn->inTransaction()) {
+            $conn->rollBack();
+        }
 
+        $message = "Unable to delete product.";
+        $messageType = "error";
     } catch (PDOException $e) {
         if ($conn->inTransaction()) {
             $conn->rollBack();
@@ -233,515 +246,569 @@ $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
 <html lang="en">
 
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<title>Product Management | Bakery System</title>
+    <title>Product Management | Bakery System</title>
 
-<style>
-* {
-    box-sizing: border-box;
-}
+    <style>
+        * {
+            box-sizing: border-box;
+        }
 
-body {
-    margin: 0;
-    padding: 30px;
-    font-family: Arial, sans-serif;
-    background: #f7f4ef;
-    color: #333;
-}
+        body {
+            margin: 0;
+            padding: 30px;
+            font-family: Arial, sans-serif;
+            background: #f7f4ef;
+            color: #333;
+        }
 
-.container {
-    max-width: 1150px;
-    margin: auto;
-}
+        .container {
+            max-width: 1150px;
+            margin: auto;
+        }
 
-h1 {
-    color: #59391f;
-}
+        h1 {
+            color: #59391f;
+        }
 
-.subtitle {
-    color: #777;
-    margin-top: -8px;
-}
+        .subtitle {
+            color: #777;
+            margin-top: -8px;
+        }
 
-.back {
-    display: inline-block;
-    margin-bottom: 15px;
-    color: #754c24;
-    text-decoration: none;
-    font-weight: bold;
-}
+        .back {
+            display: inline-block;
+            margin-bottom: 15px;
+            color: #754c24;
+            text-decoration: none;
+            font-weight: bold;
+        }
 
-.form-box,
-.table-box {
-    background: white;
-    padding: 25px;
-    border-radius: 10px;
-    margin-top: 20px;
-    box-shadow: 0 2px 8px rgba(0,0,0,.06);
-}
+        .form-box,
+        .table-box {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            margin-top: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,.06);
+        }
 
-label {
-    display: block;
-    font-weight: bold;
-    margin-top: 12px;
-}
+        label {
+            display: block;
+            font-weight: bold;
+            margin-top: 12px;
+        }
 
-input,
-textarea,
-select {
-    width: 100%;
-    padding: 12px;
-    margin: 8px 0 15px;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    font-family: Arial, sans-serif;
-}
+        input,
+        textarea,
+        select {
+            width: 100%;
+            padding: 12px;
+            margin: 8px 0 15px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-family: Arial, sans-serif;
+        }
 
-input:focus,
-textarea:focus,
-select:focus {
-    outline: none;
-    border-color: #754c24;
-}
+        input:focus,
+        textarea:focus,
+        select:focus {
+            outline: none;
+            border-color: #754c24;
+        }
 
-button,
-.btn {
-    display: inline-block;
-    padding: 10px 16px;
-    border: none;
-    border-radius: 6px;
-    color: white;
-    text-decoration: none;
-    cursor: pointer;
-    font-size: 14px;
-}
+        button,
+        .btn {
+            display: inline-block;
+            padding: 10px 16px;
+            border: none;
+            border-radius: 6px;
+            color: white;
+            text-decoration: none;
+            cursor: pointer;
+            font-size: 14px;
+        }
 
-button {
-    background: #754c24;
-}
+        button {
+            background: #754c24;
+        }
 
-button:hover {
-    background: #59391f;
-}
+        button:hover {
+            background: #59391f;
+        }
 
-.edit {
-    background: #2878b5;
-}
+        .edit {
+            background: #2878b5;
+        }
 
-.delete {
-    background: #b83232;
-}
+        .delete {
+            background: #b83232;
+        }
 
-.cancel {
-    background: #777;
-}
+        .cancel {
+            background: #777;
+        }
 
-.message {
-    padding: 13px 16px;
-    border-radius: 6px;
-    margin-top: 18px;
-    transition: opacity .5s ease;
-}
+        .message {
+            padding: 13px 16px;
+            border-radius: 6px;
+            margin-top: 18px;
+            transition: opacity .5s ease;
+        }
 
-.success-message {
-    background: #e7f5e9;
-    color: #26743a;
-    border: 1px solid #b9e2c1;
-}
+        .success-message {
+            background: #e7f5e9;
+            color: #26743a;
+            border: 1px solid #b9e2c1;
+        }
 
-.error-message {
-    background: #ffe8e8;
-    color: #a12626;
-    border: 1px solid #f2baba;
-}
+        .error-message {
+            background: #ffe8e8;
+            color: #a12626;
+            border: 1px solid #f2baba;
+        }
 
-.search-form {
-    display: flex;
-    gap: 10px;
-    margin-top: 20px;
-}
+        /* SEARCH FORM */
+        .search-form {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
 
-.search-form input {
-    margin: 0;
-}
+        .search-form button {
+            white-space: nowrap;
+        }
 
-.search-form button {
-    white-space: nowrap;
-}
+        /* AUTOCOMPLETE */
+        .search-wrap {
+            position: relative;
+            flex: 1;
+            min-width: 0;
+        }
 
-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 15px;
-}
+        .search-wrap input {
+            width: 100%;
+            margin: 0;
+        }
 
-th,
-td {
-    padding: 13px;
-    border-bottom: 1px solid #eee;
-    text-align: left;
-}
+        .suggestions {
+            display: none;
+            position: absolute;
+            top: calc(100% + 5px);
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            box-shadow: 0 4px 10px rgba(0,0,0,.12);
+            z-index: 1000;
+            max-height: 260px;
+            overflow-y: auto;
+        }
 
-th {
-    background: #f7f4ef;
-    color: #59391f;
-}
+        .suggestions.show {
+            display: block;
+        }
 
-.actions {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-}
+        .suggestion-item {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 0;
+            background: white;
+            color: #333;
+            text-align: left;
+            cursor: pointer;
+            font-size: 14px;
+        }
 
-.actions form {
-    margin: 0;
-}
+        .suggestion-item:hover,
+        .suggestion-item:focus {
+            background: #f7f4ef;
+        }
 
-.empty {
-    text-align: center;
-    color: #888;
-    padding: 20px;
-}
+        .suggestion-category {
+            display: block;
+            margin-top: 4px;
+            color: #888;
+            font-size: 12px;
+        }
 
-@media (max-width: 700px) {
-    body {
-        padding: 15px;
-    }
+        .no-suggestions {
+            padding: 12px;
+            color: #888;
+            font-size: 13px;
+        }
 
-    .table-box {
-        overflow-x: auto;
-    }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
 
-    table {
-        min-width: 750px;
-    }
+        th,
+        td {
+            padding: 13px;
+            border-bottom: 1px solid #eee;
+            text-align: left;
+        }
 
-    .search-form {
-        flex-direction: column;
-    }
-}
-</style>
+        th {
+            background: #f7f4ef;
+            color: #59391f;
+        }
 
+        .actions {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .actions form {
+            margin: 0;
+        }
+
+        .empty {
+            text-align: center;
+            color: #888;
+            padding: 20px;
+        }
+
+        @media (max-width: 700px) {
+            body {
+                padding: 15px;
+            }
+
+            .table-box {
+                overflow-x: auto;
+            }
+
+            table {
+                min-width: 750px;
+            }
+
+            .search-form {
+                flex-direction: column;
+            }
+
+            .search-form button,
+            .search-form .btn {
+                text-align: center;
+            }
+        }
+    </style>
 </head>
 
 <body>
 
 <div class="container">
 
-<a class="back" href="dashboard.php">
-    ← Back to Dashboard
-</a>
+    <a class="back" href="dashboard.php">
+        ← Back to Dashboard
+    </a>
 
-<h1>Product Management</h1>
+    <h1>Product Management</h1>
 
-<p class="subtitle">
-    Manage your bakery products.
-</p>
+    <p class="subtitle">
+        Manage your bakery products.
+    </p>
 
-<!-- NOTIFICATION -->
-
-<?php if ($message): ?>
-
-<p
-    class="message <?= $messageType === 'success'
-        ? 'success-message'
-        : 'error-message' ?>"
-    id="productMessage"
->
-    <?= htmlspecialchars($message) ?>
-</p>
-
-<?php endif; ?>
-
-
-<!-- ADD OR EDIT PRODUCT -->
-
-<div class="form-box">
-
-<?php if ($editProduct): ?>
-
-    <h2>Edit Product</h2>
-
-    <form method="POST">
-
-        <input type="hidden" name="action" value="update">
-
-        <input
-            type="hidden"
-            name="product_id"
-            value="<?= (int)$editProduct['product_id'] ?>"
+    <!-- NOTIFICATION -->
+    <?php if ($message): ?>
+        <p
+            class="message <?= $messageType === 'success'
+                ? 'success-message'
+                : 'error-message' ?>"
+            id="productMessage"
         >
+            <?= htmlspecialchars($message) ?>
+        </p>
+    <?php endif; ?>
 
-        <label>Product Name</label>
+    <!-- ADD OR EDIT PRODUCT -->
+    <div class="form-box">
 
-        <input
-            type="text"
-            name="product_name"
-            value="<?= htmlspecialchars($editProduct['product_name']) ?>"
-            maxlength="150"
-            required
-        >
+        <?php if ($editProduct): ?>
 
-        <label>Category</label>
+            <h2>Edit Product</h2>
 
-        <select name="category_id" required>
+            <form method="POST">
 
-            <option value="">Select Category</option>
+                <input type="hidden" name="action" value="update">
 
-            <?php foreach ($categories as $category): ?>
-
-                <option
-                    value="<?= (int)$category['category_id'] ?>"
-                    <?= $editProduct['category_id'] == $category['category_id']
-                        ? 'selected' : '' ?>
+                <input
+                    type="hidden"
+                    name="product_id"
+                    value="<?= (int)$editProduct['product_id'] ?>"
                 >
-                    <?= htmlspecialchars($category['category_name']) ?>
-                </option>
 
-            <?php endforeach; ?>
+                <label>Product Name</label>
 
-        </select>
+                <input
+                    type="text"
+                    name="product_name"
+                    value="<?= htmlspecialchars($editProduct['product_name']) ?>"
+                    maxlength="150"
+                    required
+                >
 
-        <label>Price (₱)</label>
+                <label>Category</label>
 
-        <input
-            type="number"
-            name="price"
-            min="0.01"
-            step="0.01"
-            value="<?= htmlspecialchars((string)$editProduct['price']) ?>"
-            required
-        >
+                <select name="category_id" required>
+                    <option value="">Select Category</option>
 
-        <label>Description</label>
+                    <?php foreach ($categories as $category): ?>
+                        <option
+                            value="<?= (int)$category['category_id'] ?>"
+                            <?= $editProduct['category_id'] == $category['category_id']
+                                ? 'selected' : '' ?>
+                        >
+                            <?= htmlspecialchars($category['category_name']) ?>
+                        </option>
+                    <?php endforeach; ?>
 
-        <textarea
-            name="description"
-            rows="3"
-        ><?= htmlspecialchars($editProduct['description'] ?? '') ?></textarea>
+                </select>
 
-        <button type="submit">Update Product</button>
+                <label>Price (₱)</label>
 
-        <a class="btn cancel" href="products.php">Cancel</a>
+                <input
+                    type="number"
+                    name="price"
+                    min="0.01"
+                    step="0.01"
+                    value="<?= htmlspecialchars((string)$editProduct['price']) ?>"
+                    required
+                >
 
-    </form>
+                <label>Description</label>
 
-<?php else: ?>
+                <textarea
+                    name="description"
+                    rows="3"
+                ><?= htmlspecialchars($editProduct['description'] ?? '') ?></textarea>
 
-    <h2>Add New Product</h2>
+                <button type="submit">Update Product</button>
 
-    <?php if (count($categories) > 0): ?>
+                <a class="btn cancel" href="products.php">Cancel</a>
 
-        <form method="POST">
+            </form>
 
-            <input type="hidden" name="action" value="add">
+        <?php else: ?>
 
-            <label>Product Name</label>
+            <h2>Add New Product</h2>
 
-            <input
-                type="text"
-                name="product_name"
-                placeholder="Example: Chocolate Cake"
-                maxlength="150"
-                required
-            >
+            <?php if (count($categories) > 0): ?>
 
-            <label>Category</label>
+                <form method="POST">
 
-            <select name="category_id" required>
+                    <input type="hidden" name="action" value="add">
 
-                <option value="">Select Category</option>
+                    <label>Product Name</label>
 
-                <?php foreach ($categories as $category): ?>
+                    <input
+                        type="text"
+                        name="product_name"
+                        placeholder="Example: Chocolate Cake"
+                        maxlength="150"
+                        required
+                    >
 
-                    <option value="<?= (int)$category['category_id'] ?>">
-                        <?= htmlspecialchars($category['category_name']) ?>
-                    </option>
+                    <label>Category</label>
 
-                <?php endforeach; ?>
+                    <select name="category_id" required>
+                        <option value="">Select Category</option>
 
-            </select>
+                        <?php foreach ($categories as $category): ?>
+                            <option value="<?= (int)$category['category_id'] ?>">
+                                <?= htmlspecialchars($category['category_name']) ?>
+                            </option>
+                        <?php endforeach; ?>
 
-            <label>Price (₱)</label>
+                    </select>
 
-            <input
-                type="number"
-                name="price"
-                placeholder="Example: 50.00"
-                min="0.01"
-                step="0.01"
-                required
-            >
+                    <label>Price (₱)</label>
 
-            <label>Description</label>
+                    <input
+                        type="number"
+                        name="price"
+                        placeholder="Example: 50.00"
+                        min="0.01"
+                        step="0.01"
+                        required
+                    >
 
-            <textarea
-                name="description"
-                placeholder="Enter product description"
-                rows="3"
-            ></textarea>
+                    <label>Description</label>
 
-            <button type="submit">Add Product</button>
+                    <textarea
+                        name="description"
+                        placeholder="Enter product description"
+                        rows="3"
+                    ></textarea>
+
+                    <button type="submit">Add Product</button>
+
+                </form>
+
+            <?php else: ?>
+
+                <p class="message error-message">
+                    Please add a category first before registering products.
+                </p>
+
+                <a class="btn edit" href="categories.php">
+                    Manage Categories
+                </a>
+
+            <?php endif; ?>
+
+        <?php endif; ?>
+
+    </div>
+
+    <!-- PRODUCT LIST -->
+    <div class="table-box">
+
+        <h2>Product List</h2>
+
+        <!-- LIVE SEARCH WITH AUTOCOMPLETE -->
+        <form method="GET" class="search-form" id="productSearchForm">
+
+            <div class="search-wrap">
+
+                <input
+                    type="text"
+                    name="search"
+                    id="productSearch"
+                    placeholder="Search product or category..."
+                    value="<?= htmlspecialchars($search) ?>"
+                    autocomplete="off"
+                >
+
+                <div
+                    class="suggestions"
+                    id="searchSuggestions"
+                ></div>
+
+            </div>
+
+            <button type="submit">Search</button>
+
+            <a class="btn cancel" href="products.php">Clear</a>
 
         </form>
 
-    <?php else: ?>
+        <table>
 
-        <p class="message error-message">
-            Please add a category first before registering products.
-        </p>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Product Name</th>
+                    <th>Category</th>
+                    <th>Price</th>
+                    <th>Description</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
 
-        <a class="btn edit" href="categories.php">
-            Manage Categories
-        </a>
+            <tbody>
 
-    <?php endif; ?>
+                <?php if ($products): ?>
 
-<?php endif; ?>
+                    <?php foreach ($products as $product): ?>
 
-</div>
+                        <tr>
 
+                            <td>
+                                <?= (int)$product['product_id'] ?>
+                            </td>
 
-<!-- PRODUCT LIST -->
+                            <td>
+                                <?= htmlspecialchars($product['product_name']) ?>
+                            </td>
 
-<div class="table-box">
+                            <td>
+                                <?= htmlspecialchars($product['category_name'] ?? 'Uncategorized') ?>
+                            </td>
 
-<h2>Product List</h2>
+                            <td>
+                                ₱<?= number_format((float)$product['price'], 2) ?>
+                            </td>
 
-<!-- SEARCH -->
+                            <td>
+                                <?= htmlspecialchars($product['description'] ?? '') ?>
+                            </td>
 
-<form method="GET" class="search-form">
+                            <td>
 
-    <input
-        type="text"
-        name="search"
-        placeholder="Search product or category..."
-        value="<?= htmlspecialchars($search) ?>"
-    >
+                                <div class="actions">
 
-    <button type="submit">Search</button>
+                                    <a
+                                        class="btn edit"
+                                        href="products.php?edit=<?= (int)$product['product_id'] ?>"
+                                    >
+                                        Edit
+                                    </a>
 
-    <a class="btn cancel" href="products.php">Clear</a>
+                                    <form
+                                        method="POST"
+                                        onsubmit="return confirm('Are you sure you want to delete this product?');"
+                                    >
 
-</form>
+                                        <input
+                                            type="hidden"
+                                            name="action"
+                                            value="delete"
+                                        >
 
+                                        <input
+                                            type="hidden"
+                                            name="product_id"
+                                            value="<?= (int)$product['product_id'] ?>"
+                                        >
 
-<table>
+                                        <button type="submit" class="delete">
+                                            Delete
+                                        </button>
 
-    <thead>
+                                    </form>
 
-        <tr>
-            <th>ID</th>
-            <th>Product Name</th>
-            <th>Category</th>
-            <th>Price</th>
-            <th>Description</th>
-            <th>Actions</th>
-        </tr>
+                                </div>
 
-    </thead>
+                            </td>
 
-    <tbody>
+                        </tr>
 
-    <?php if ($products): ?>
+                    <?php endforeach; ?>
 
-        <?php foreach ($products as $product): ?>
+                <?php else: ?>
 
-            <tr>
+                    <tr>
+                        <td colspan="6" class="empty">
+                            No products found.
+                        </td>
+                    </tr>
 
-                <td>
-                    <?= (int)$product['product_id'] ?>
-                </td>
+                <?php endif; ?>
 
-                <td>
-                    <?= htmlspecialchars($product['product_name']) ?>
-                </td>
+            </tbody>
 
-                <td>
-                    <?= htmlspecialchars($product['category_name'] ?? 'Uncategorized') ?>
-                </td>
+        </table>
 
-                <td>
-                    ₱<?= number_format((float)$product['price'], 2) ?>
-                </td>
-
-                <td>
-                    <?= htmlspecialchars($product['description'] ?? '') ?>
-                </td>
-
-                <td>
-
-                    <div class="actions">
-
-                        <a
-                            class="btn edit"
-                            href="products.php?edit=<?= (int)$product['product_id'] ?>"
-                        >
-                            Edit
-                        </a>
-
-                        <form
-                            method="POST"
-                            onsubmit="return confirm('Are you sure you want to delete this product?');"
-                        >
-
-                            <input
-                                type="hidden"
-                                name="action"
-                                value="delete"
-                            >
-
-                            <input
-                                type="hidden"
-                                name="product_id"
-                                value="<?= (int)$product['product_id'] ?>"
-                            >
-
-                            <button type="submit" class="delete">
-                                Delete
-                            </button>
-
-                        </form>
-
-                    </div>
-
-                </td>
-
-            </tr>
-
-        <?php endforeach; ?>
-
-    <?php else: ?>
-
-        <tr>
-            <td colspan="6" class="empty">
-                No products found.
-            </td>
-        </tr>
-
-    <?php endif; ?>
-
-    </tbody>
-
-</table>
+    </div>
 
 </div>
 
-</div>
-
-
-<!-- AUTO-HIDE NOTIFICATION -->
-
+<!-- JAVASCRIPT -->
 <script>
 
+// AUTO-HIDE NOTIFICATION
 const message = document.getElementById("productMessage");
 
 if (message) {
-
     setTimeout(() => {
-
         message.style.opacity = "0";
 
         setTimeout(() => {
@@ -749,8 +816,134 @@ if (message) {
         }, 500);
 
     }, 3000);
-
 }
+
+// LIVE SEARCH AUTOCOMPLETE
+const searchInput = document.getElementById("productSearch");
+const suggestions = document.getElementById("searchSuggestions");
+const searchForm = document.getElementById("productSearchForm");
+
+let searchTimer;
+let currentRequest = null;
+
+searchInput.addEventListener("input", function () {
+
+    const query = this.value.trim();
+
+    clearTimeout(searchTimer);
+
+    if (currentRequest) {
+        currentRequest.abort();
+    }
+
+    suggestions.replaceChildren();
+
+    if (query.length === 0) {
+        suggestions.classList.remove("show");
+        return;
+    }
+
+    searchTimer = setTimeout(async function () {
+
+        currentRequest = new AbortController();
+
+        try {
+
+            const response = await fetch(
+                "search_products.php?q=" + encodeURIComponent(query),
+                { signal: currentRequest.signal }
+            );
+
+            if (!response.ok) {
+                throw new Error("Search request failed");
+            }
+
+            const products = await response.json();
+
+            suggestions.replaceChildren();
+
+            if (products.length === 0) {
+
+                const empty = document.createElement("div");
+                empty.className = "no-suggestions";
+                empty.textContent = "No products found.";
+
+                suggestions.appendChild(empty);
+
+            } else {
+
+                products.forEach(function (product) {
+
+                    const item = document.createElement("button");
+                    item.type = "button";
+                    item.className = "suggestion-item";
+
+                    const name = document.createElement("span");
+                    name.textContent = product.product_name;
+
+                    const category = document.createElement("span");
+                    category.className = "suggestion-category";
+                    category.textContent =
+                        product.category_name || "Uncategorized";
+
+                    item.appendChild(name);
+                    item.appendChild(category);
+
+                    item.addEventListener("click", function () {
+
+                        searchInput.value = product.product_name;
+                        suggestions.classList.remove("show");
+
+                        searchForm.requestSubmit();
+
+                    });
+
+                    suggestions.appendChild(item);
+
+                });
+
+            }
+
+            suggestions.classList.add("show");
+
+        } catch (error) {
+
+            if (error.name === "AbortError") {
+                return;
+            }
+
+            suggestions.replaceChildren();
+
+            const errorMessage = document.createElement("div");
+            errorMessage.className = "no-suggestions";
+            errorMessage.textContent = "Unable to load suggestions.";
+
+            suggestions.appendChild(errorMessage);
+            suggestions.classList.add("show");
+
+        }
+
+    }, 200);
+
+});
+
+// CLOSE SUGGESTIONS WHEN CLICKING OUTSIDE
+document.addEventListener("click", function (event) {
+
+    if (!event.target.closest(".search-wrap")) {
+        suggestions.classList.remove("show");
+    }
+
+});
+
+// CLOSE SUGGESTIONS USING ESCAPE
+searchInput.addEventListener("keydown", function (event) {
+
+    if (event.key === "Escape") {
+        suggestions.classList.remove("show");
+    }
+
+});
 
 </script>
 
