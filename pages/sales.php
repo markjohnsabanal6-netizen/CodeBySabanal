@@ -185,12 +185,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['checkout'])) {
     }
 }
 
-// GET PRODUCTS
+// GET ALL CATEGORIES
+// Automatically includes every category added in Category Management.
+$categoryStmt = $conn->query("
+    SELECT category_id, category_name
+    FROM categories
+    ORDER BY category_name ASC
+");
+
+$categories = $categoryStmt->fetchAll(PDO::FETCH_ASSOC);
+
+// GET PRODUCTS WITH CATEGORY AND STOCK INFORMATION
 $productStmt = $conn->query("
     SELECT
         p.product_id,
         p.product_name,
         p.price,
+        p.category_id,
         c.category_name,
         COALESCE(i.quantity, 0) AS stock
     FROM products p
@@ -314,9 +325,17 @@ body {
 
 .form-row {
     display: grid;
-    grid-template-columns: 2fr 1fr 1fr;
+    grid-template-columns: 1fr 2fr 1fr 1fr;
     gap: 12px;
     margin-bottom: 15px;
+}
+
+.category-filter {
+    margin-bottom: 15px;
+}
+
+.category-filter select {
+    max-width: 420px;
 }
 
 label {
@@ -413,6 +432,10 @@ th {
         grid-template-columns: 1fr;
     }
 
+    .category-filter select {
+        max-width: 100%;
+    }
+
     .card {
         overflow-x: auto;
     }
@@ -462,6 +485,25 @@ th {
     <div class="card">
         <h3>Select Products</h3>
 
+        <!-- DYNAMIC CATEGORY FILTER -->
+        <div class="category-filter">
+            <label for="categoryFilter">Category</label>
+
+            <select id="categoryFilter">
+                <option value="all">-- All Categories --</option>
+
+                <?php foreach ($categories as $category): ?>
+                    <option value="<?= (int)$category['category_id'] ?>">
+                        <?= htmlspecialchars(
+                            $category['category_name'],
+                            ENT_QUOTES,
+                            'UTF-8'
+                        ) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+
         <div class="form-row">
 
             <div>
@@ -472,17 +514,33 @@ th {
 
                     <?php foreach ($products as $product): ?>
                         <?php if ((int)$product['stock'] > 0): ?>
+
                             <option
                                 value="<?= (int)$product['product_id'] ?>"
-                                data-name="<?= htmlspecialchars($product['product_name'], ENT_QUOTES) ?>"
-                                data-price="<?= htmlspecialchars((string)$product['price'], ENT_QUOTES) ?>"
+                                data-name="<?= htmlspecialchars(
+                                    $product['product_name'],
+                                    ENT_QUOTES,
+                                    'UTF-8'
+                                ) ?>"
+                                data-price="<?= htmlspecialchars(
+                                    (string)$product['price'],
+                                    ENT_QUOTES,
+                                    'UTF-8'
+                                ) ?>"
                                 data-stock="<?= (int)$product['stock'] ?>"
+                                data-category-id="<?= (int)($product['category_id'] ?? 0) ?>"
                             >
-                                <?= htmlspecialchars($product['product_name']) ?>
+                                <?= htmlspecialchars(
+                                    $product['product_name'],
+                                    ENT_QUOTES,
+                                    'UTF-8'
+                                ) ?>
                                 (Stock: <?= (int)$product['stock'] ?>)
                             </option>
+
                         <?php endif; ?>
                     <?php endforeach; ?>
+
                 </select>
             </div>
 
@@ -540,6 +598,7 @@ th {
                 </p>
 
                 <label for="paymentAmount">Cash Received</label>
+
                 <input
                     type="number"
                     id="paymentAmount"
@@ -590,20 +649,31 @@ th {
             <tbody>
 
                 <?php if (empty($recent_sales)): ?>
+
                     <tr>
-                        <td colspan="5" class="empty">No sales recorded yet.</td>
+                        <td colspan="5" class="empty">
+                            No sales recorded yet.
+                        </td>
                     </tr>
+
                 <?php else: ?>
 
                     <?php foreach ($recent_sales as $sale): ?>
+
                         <tr>
                             <td>#<?= (int)$sale['sale_id'] ?></td>
 
                             <td>
-                                <?= htmlspecialchars($sale['full_name']) ?>
+                                <?= htmlspecialchars(
+                                    $sale['full_name'],
+                                    ENT_QUOTES,
+                                    'UTF-8'
+                                ) ?>
                             </td>
 
-                            <td><?= peso($sale['total_amount']) ?></td>
+                            <td>
+                                <?= peso($sale['total_amount']) ?>
+                            </td>
 
                             <td>
                                 <?= htmlspecialchars(date(
@@ -613,12 +683,14 @@ th {
                             </td>
 
                             <td>
-                                <a href="receipt.php?sale_id=<?= (int)$sale['sale_id'] ?>"
-                                   target="_blank">
+                                <a
+                                    href="receipt.php?sale_id=<?= (int)$sale['sale_id'] ?>"
+                                    target="_blank">
                                     View Receipt
                                 </a>
                             </td>
                         </tr>
+
                     <?php endforeach; ?>
 
                 <?php endif; ?>
@@ -634,6 +706,7 @@ th {
 let cart = [];
 
 const productSelect = document.getElementById('productSelect');
+const categoryFilter = document.getElementById('categoryFilter');
 const productPrice = document.getElementById('productPrice');
 const productQuantity = document.getElementById('productQuantity');
 const cartBody = document.getElementById('cartBody');
@@ -647,8 +720,38 @@ function formatPeso(amount) {
     return '₱' + amount.toFixed(2);
 }
 
-// Display selected product price
+
+// FILTER PRODUCTS BY CATEGORY
+// Categories are loaded dynamically from the database.
+categoryFilter.addEventListener('change', function() {
+
+    const selectedCategory = this.value;
+
+    productSelect.value = '';
+    productPrice.value = '';
+
+    Array.from(productSelect.options).forEach((option, index) => {
+
+        // Keep the default option visible
+        if (index === 0) {
+            option.hidden = false;
+            return;
+        }
+
+        const productCategory = option.dataset.categoryId || '0';
+
+        option.hidden = (
+            selectedCategory !== 'all' &&
+            productCategory !== selectedCategory
+        );
+    });
+
+});
+
+
+// DISPLAY SELECTED PRODUCT PRICE
 productSelect.addEventListener('change', function() {
+
     const option = this.options[this.selectedIndex];
 
     if (!this.value) {
@@ -657,10 +760,13 @@ productSelect.addEventListener('change', function() {
     }
 
     const price = Number(option.dataset.price);
+
     productPrice.value = formatPeso(price);
+
 });
 
-// Add product to cart
+
+// ADD PRODUCT TO CART
 document.getElementById('addProduct').addEventListener('click', function() {
 
     const option = productSelect.options[productSelect.selectedIndex];
@@ -682,6 +788,7 @@ document.getElementById('addProduct').addEventListener('click', function() {
     }
 
     let existing = cart.find(item => item.id === productId);
+
     const currentQuantity = existing ? existing.quantity : 0;
 
     if (currentQuantity + quantity > stock) {
@@ -690,8 +797,11 @@ document.getElementById('addProduct').addEventListener('click', function() {
     }
 
     if (existing) {
+
         existing.quantity += quantity;
+
     } else {
+
         cart.push({
             id: productId,
             name: name,
@@ -699,6 +809,7 @@ document.getElementById('addProduct').addEventListener('click', function() {
             quantity: quantity,
             stock: stock
         });
+
     }
 
     productSelect.value = '';
@@ -706,15 +817,21 @@ document.getElementById('addProduct').addEventListener('click', function() {
     productQuantity.value = 1;
 
     renderCart();
+
 });
 
-// Remove product
+
+// REMOVE PRODUCT
 function removeProduct(index) {
+
     cart.splice(index, 1);
+
     renderCart();
+
 }
 
-// Render cart
+
+// RENDER CART
 function renderCart() {
 
     cartBody.replaceChildren();
@@ -723,6 +840,7 @@ function renderCart() {
     let total = 0;
 
     if (cart.length === 0) {
+
         const row = document.createElement('tr');
         const cell = document.createElement('td');
 
@@ -732,11 +850,13 @@ function renderCart() {
 
         row.appendChild(cell);
         cartBody.appendChild(row);
+
     }
 
     cart.forEach((item, index) => {
 
         const subtotal = item.price * item.quantity;
+
         total += subtotal;
 
         const row = document.createElement('tr');
@@ -749,37 +869,51 @@ function renderCart() {
         ];
 
         values.forEach(value => {
+
             const cell = document.createElement('td');
+
             cell.textContent = value;
+
             row.appendChild(cell);
+
         });
 
         const actionCell = document.createElement('td');
+
         const removeButton = document.createElement('button');
 
         removeButton.type = 'button';
         removeButton.className = 'remove-btn';
         removeButton.textContent = 'Remove';
-        removeButton.addEventListener('click', () => removeProduct(index));
+
+        removeButton.addEventListener(
+            'click',
+            () => removeProduct(index)
+        );
 
         actionCell.appendChild(removeButton);
+
         row.appendChild(actionCell);
 
         cartBody.appendChild(row);
 
-        // Hidden inputs submitted to PHP
+
+        // HIDDEN INPUTS SUBMITTED TO PHP
         const productInput = document.createElement('input');
+
         productInput.type = 'hidden';
         productInput.name = 'product_id[]';
         productInput.value = item.id;
 
         const quantityInput = document.createElement('input');
+
         quantityInput.type = 'hidden';
         quantityInput.name = 'quantity[]';
         quantityInput.value = item.quantity;
 
         hiddenInputs.appendChild(productInput);
         hiddenInputs.appendChild(quantityInput);
+
     });
 
     totalAmount.textContent = formatPeso(total);
@@ -787,9 +921,11 @@ function renderCart() {
     updateChange();
 
     checkoutButton.disabled = cart.length === 0;
+
 }
 
-// Calculate change
+
+// CALCULATE CHANGE
 function updateChange() {
 
     const total = cart.reduce(
@@ -798,23 +934,30 @@ function updateChange() {
     );
 
     const payment = Number(paymentAmount.value) || 0;
+
     const change = Math.max(payment - total, 0);
 
     changeAmount.textContent = formatPeso(change);
 
     checkoutButton.disabled =
         cart.length === 0 || payment < total;
+
 }
 
 paymentAmount.addEventListener('input', updateChange);
 
-// Confirm checkout
+
+// CONFIRM CHECKOUT
 document.getElementById('checkoutForm').addEventListener('submit', function(event) {
 
     if (cart.length === 0) {
+
         event.preventDefault();
+
         alert('Please add products to your cart.');
+
         return;
+
     }
 
     const total = cart.reduce(
@@ -823,17 +966,26 @@ document.getElementById('checkoutForm').addEventListener('submit', function(even
     );
 
     if (Number(paymentAmount.value) < total) {
+
         event.preventDefault();
+
         alert('Insufficient payment amount.');
+
         return;
+
     }
 
     if (!confirm('Are you sure you want to complete this sale?')) {
+
         event.preventDefault();
+
     }
+
 });
 
+
 renderCart();
+
 </script>
 
 </body>

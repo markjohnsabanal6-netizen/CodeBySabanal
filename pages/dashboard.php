@@ -9,6 +9,11 @@ if (!isset($_SESSION['user_id'])) {
     exit;
 }
 
+// Get logged-in user's information
+$name = htmlspecialchars($_SESSION['full_name'] ?? 'User');
+$role = $_SESSION['role'] ?? 'staff';
+$isAdmin = ($role === 'admin');
+
 // Get dashboard statistics
 $totalProducts = $conn->query(
     "SELECT COUNT(*) FROM products"
@@ -41,7 +46,6 @@ $recentSales = $conn->query(
      LIMIT 5"
 )->fetchAll(PDO::FETCH_ASSOC);
 
-$name = htmlspecialchars($_SESSION['full_name']);
 ?>
 
 <!DOCTYPE html>
@@ -50,7 +54,7 @@ $name = htmlspecialchars($_SESSION['full_name']);
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<title>Admin Dashboard | Bakery System</title>
+<title>Dashboard | Bakery System</title>
 
 <style>
 * {
@@ -71,6 +75,7 @@ body {
     color: white;
     position: fixed;
     padding: 25px 15px;
+    overflow-y: auto;
 }
 
 .sidebar h2 {
@@ -92,6 +97,11 @@ body {
     background: #82552f;
 }
 
+.sidebar .logout {
+    background: #a83e32;
+    margin-top: 30px;
+}
+
 .main {
     margin-left: 240px;
     padding: 30px;
@@ -108,6 +118,15 @@ body {
 
 .header h1 {
     color: #59391f;
+}
+
+.role-badge {
+    background: #eee3d5;
+    color: #59391f;
+    padding: 9px 15px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: bold;
 }
 
 .cards {
@@ -132,6 +151,7 @@ body {
     font-size: 27px;
     font-weight: bold;
     color: #59391f;
+    overflow-wrap: anywhere;
 }
 
 .table-box {
@@ -158,11 +178,6 @@ th {
     background: #f7f4ef;
 }
 
-.logout {
-    background: #a83e32;
-    margin-top: 30px;
-}
-
 @media (max-width: 900px) {
     .cards {
         grid-template-columns: repeat(2, 1fr);
@@ -174,6 +189,16 @@ th {
         width: 100%;
         height: auto;
         position: relative;
+        padding: 15px;
+    }
+
+    .sidebar h2 {
+        margin-bottom: 15px;
+    }
+
+    .sidebar a {
+        padding: 11px;
+        margin-bottom: 5px;
     }
 
     .main {
@@ -183,6 +208,10 @@ th {
 
     .cards {
         grid-template-columns: 1fr;
+    }
+
+    .header {
+        align-items: flex-start;
     }
 }
 </style>
@@ -218,6 +247,12 @@ th {
         Reports
     </a>
 
+    <?php if ($isAdmin): ?>
+        <a href="user_management.php">
+            User Management
+        </a>
+    <?php endif; ?>
+
     <a href="../logout.php" class="logout">
         Logout
     </a>
@@ -227,14 +262,16 @@ th {
 <div class="main">
 
     <div class="header">
+
         <div>
             <h1>Dashboard</h1>
             <p>Welcome back, <?= $name ?>!</p>
         </div>
 
-        <div>
-            <strong>Administrator</strong>
+        <div class="role-badge">
+            <?= $isAdmin ? 'Administrator' : 'Staff' ?>
         </div>
+
     </div>
 
     <div class="cards">
@@ -266,6 +303,7 @@ th {
         <h2>Recent Sales Transactions</h2>
 
         <table>
+
             <thead>
                 <tr>
                     <th>Sale ID</th>
@@ -282,7 +320,10 @@ th {
                 <?php foreach ($recentSales as $sale): ?>
 
                 <tr>
-                    <td>#<?= $sale['sale_id'] ?></td>
+
+                    <td>
+                        #<?= (int)$sale['sale_id'] ?>
+                    </td>
 
                     <td>
                         <?= htmlspecialchars(
@@ -299,6 +340,7 @@ th {
                     <td>
                         <?= htmlspecialchars($sale['sale_date']) ?>
                     </td>
+
                 </tr>
 
                 <?php endforeach; ?>
@@ -314,6 +356,7 @@ th {
             <?php endif; ?>
 
             </tbody>
+
         </table>
 
     </div>
