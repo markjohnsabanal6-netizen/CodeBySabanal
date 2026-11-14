@@ -374,6 +374,11 @@ button {
     font-weight: bold;
 }
 
+.checkout-btn:disabled {
+    background: #999;
+    cursor: not-allowed;
+}
+
 .remove-btn {
     background: #dc3545;
     color: white;
@@ -513,32 +518,32 @@ th {
                     <option value="">-- Select Product --</option>
 
                     <?php foreach ($products as $product): ?>
-                        <?php if ((int)$product['stock'] > 0): ?>
+                        <?php $stock = (int)$product['stock']; ?>
 
-                            <option
-                                value="<?= (int)$product['product_id'] ?>"
-                                data-name="<?= htmlspecialchars(
-                                    $product['product_name'],
-                                    ENT_QUOTES,
-                                    'UTF-8'
-                                ) ?>"
-                                data-price="<?= htmlspecialchars(
-                                    (string)$product['price'],
-                                    ENT_QUOTES,
-                                    'UTF-8'
-                                ) ?>"
-                                data-stock="<?= (int)$product['stock'] ?>"
-                                data-category-id="<?= (int)($product['category_id'] ?? 0) ?>"
-                            >
-                                <?= htmlspecialchars(
-                                    $product['product_name'],
-                                    ENT_QUOTES,
-                                    'UTF-8'
-                                ) ?>
-                                (Stock: <?= (int)$product['stock'] ?>)
-                            </option>
+                        <option
+                            value="<?= (int)$product['product_id'] ?>"
+                            data-name="<?= htmlspecialchars(
+                                $product['product_name'],
+                                ENT_QUOTES,
+                                'UTF-8'
+                            ) ?>"
+                            data-price="<?= htmlspecialchars(
+                                (string)$product['price'],
+                                ENT_QUOTES,
+                                'UTF-8'
+                            ) ?>"
+                            data-stock="<?= $stock ?>"
+                            data-category-id="<?= (int)($product['category_id'] ?? 0) ?>"
+                            <?= $stock <= 0 ? 'disabled' : '' ?>
+                        >
+                            <?= htmlspecialchars(
+                                $product['product_name'],
+                                ENT_QUOTES,
+                                'UTF-8'
+                            ) ?>
+                            (<?= $stock > 0 ? 'Stock: ' . $stock : 'Out of stock' ?>)
+                        </option>
 
-                        <?php endif; ?>
                     <?php endforeach; ?>
 
                 </select>
@@ -721,32 +726,40 @@ function formatPeso(amount) {
 }
 
 
-// FILTER PRODUCTS BY CATEGORY
-// Categories are loaded dynamically from the database.
-categoryFilter.addEventListener('change', function() {
+// Keep a clean copy of every product option.
+// Rebuild the dropdown on category changes instead of relying on
+// the HTML hidden attribute on <option>, which is inconsistent
+// in some browsers.
+const allProductOptions = Array.from(productSelect.options)
+    .slice(1)
+    .map(option => option.cloneNode(true));
 
-    const selectedCategory = this.value;
+function filterProductsByCategory() {
+    const selectedCategory = categoryFilter.value;
 
-    productSelect.value = '';
-    productPrice.value = '';
+    productSelect.replaceChildren(
+        new Option('-- Select Product --', '')
+    );
 
-    Array.from(productSelect.options).forEach((option, index) => {
-
-        // Keep the default option visible
-        if (index === 0) {
-            option.hidden = false;
-            return;
-        }
-
+    allProductOptions.forEach(option => {
         const productCategory = option.dataset.categoryId || '0';
 
-        option.hidden = (
-            selectedCategory !== 'all' &&
-            productCategory !== selectedCategory
-        );
+        if (
+            selectedCategory === 'all' ||
+            productCategory === selectedCategory
+        ) {
+            productSelect.add(option.cloneNode(true));
+        }
     });
 
-});
+    productPrice.value = '';
+    productSelect.value = '';
+}
+
+categoryFilter.addEventListener('change', filterProductsByCategory);
+
+// Initialize the product list for the default category.
+filterProductsByCategory();
 
 
 // DISPLAY SELECTED PRODUCT PRICE
@@ -781,6 +794,11 @@ document.getElementById('addProduct').addEventListener('click', function() {
     const price = Number(option.dataset.price);
     const stock = Number(option.dataset.stock);
     const quantity = Number(productQuantity.value);
+
+    if (stock <= 0) {
+        alert('This product is currently out of stock.');
+        return;
+    }
 
     if (!Number.isInteger(quantity) || quantity <= 0) {
         alert('Please enter a valid quantity.');
