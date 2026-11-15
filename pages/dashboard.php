@@ -1,7 +1,13 @@
 
 <?php
+// Set Philippine timezone before using PHP date functions.
+date_default_timezone_set('Asia/Manila');
+
 session_start();
 require_once '../config/database.php';
+
+// Set MySQL session timezone to Philippine time.
+$conn->exec("SET time_zone = '+08:00'");
 
 // Protect dashboard from unauthorized access
 if (!isset($_SESSION['user_id'])) {
@@ -1159,8 +1165,8 @@ td.amount {
                 <?php foreach ($chartData as $index => $day): ?>
 
                     <?php
-                        $height = ($day['amount'] / $chartMax) * 100;
-                        $isToday = ($day['date'] === date('Y-m-d'));
+                    $height = ($day['amount'] / $chartMax) * 100;
+                    $isToday = ($day['date'] === date('Y-m-d'));
                     ?>
 
                     <div class="chart-column">
