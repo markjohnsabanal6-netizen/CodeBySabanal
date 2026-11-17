@@ -1,26 +1,40 @@
 
 <?php
-// Set Philippine timezone before using PHP date functions.
-date_default_timezone_set('Asia/Manila');
+// Set the same timezone as the Windows computer (Pacific Time).
+date_default_timezone_set('America/Los_Angeles');
 
 session_start();
 require_once '../config/database.php';
 
-// Set MySQL session timezone to Philippine time.
-$conn->exec("SET time_zone = '+08:00'");
+// Synchronize MySQL timezone with Pacific Time.
+$pacificOffset = (
+    new DateTime(
+        'now',
+        new DateTimeZone('America/Los_Angeles')
+    )
+)->format('P');
 
-// Protect dashboard from unauthorized access
+$conn->exec(
+    "SET time_zone = " . $conn->quote($pacificOffset)
+);
+
+// Protect dashboard from unauthorized access.
 if (!isset($_SESSION['user_id'])) {
     header("Location: ../login.php");
     exit;
 }
 
-// Logged-in user information
-$name = htmlspecialchars($_SESSION['full_name'] ?? 'User', ENT_QUOTES, 'UTF-8');
+// Logged-in user information.
+$name = htmlspecialchars(
+    $_SESSION['full_name'] ?? 'User',
+    ENT_QUOTES,
+    'UTF-8'
+);
+
 $role = $_SESSION['role'] ?? 'staff';
 $isAdmin = ($role === 'admin');
 
-// Dashboard statistics
+// Dashboard statistics.
 $totalProducts = (int) $conn->query("
     SELECT COUNT(*) FROM products
 ")->fetchColumn();
@@ -62,7 +76,7 @@ $outOfStock = (int) $conn->query("
     WHERE quantity <= 0
 ")->fetchColumn();
 
-// Recent sales transactions
+// Recent sales transactions.
 $recentSales = $conn->query("
     SELECT
         s.sale_id,
@@ -76,7 +90,7 @@ $recentSales = $conn->query("
     LIMIT 6
 ")->fetchAll(PDO::FETCH_ASSOC);
 
-// Low stock products
+// Low stock products.
 $lowStockItems = $conn->query("
     SELECT
         p.product_name,
@@ -90,7 +104,7 @@ $lowStockItems = $conn->query("
     LIMIT 5
 ")->fetchAll(PDO::FETCH_ASSOC);
 
-// Sales for the last 7 days
+// Sales for the last 7 days.
 $weeklySales = $conn->query("
     SELECT
         DATE(sale_date) AS sale_day,
@@ -102,14 +116,14 @@ $weeklySales = $conn->query("
     ORDER BY sale_day ASC
 ")->fetchAll(PDO::FETCH_ASSOC);
 
-// Convert weekly sales into an associative array
+// Convert weekly sales into an associative array.
 $salesByDate = [];
 
 foreach ($weeklySales as $sale) {
     $salesByDate[$sale['sale_day']] = (float) $sale['daily_total'];
 }
 
-// Generate all 7 dates, including days with no sales
+// Generate all 7 dates.
 $chartData = [];
 $chartMax = 0;
 
@@ -129,9 +143,8 @@ for ($i = 6; $i >= 0; $i--) {
     }
 }
 
-// Prevent division by zero
+// Prevent division by zero.
 $chartMax = max($chartMax, 1);
-
 ?>
 
 <!DOCTYPE html>
@@ -145,131 +158,181 @@ $chartMax = max($chartMax, 1);
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
 
 <style>
-* {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-}
 
 :root {
-    --brown: #59391f;
-    --brown-light: #82552f;
+    --brown-dark: #54351f;
+    --brown-deep: #422918;
+    --brown: #805735;
+    --brown-light: #a77b55;
     --cream: #f7f4ef;
-    --text: #33291f;
-    --muted: #8a8178;
-    --border: #eee8e0;
+    --text: #34271f;
+    --muted: #88796e;
+    --border: #eee5dc;
     --white: #ffffff;
+    --sidebar-width: 260px;
+}
+
+* {
+    box-sizing: border-box;
 }
 
 body {
+    margin: 0;
+    min-height: 100vh;
     font-family: 'DM Sans', Arial, sans-serif;
     background: var(--cream);
     color: var(--text);
 }
 
-/* SIDEBAR */
+/* =================================
+   SIDEBAR - EXACT CATEGORIES DESIGN
+================================= */
 
 .sidebar {
-    width: 250px;
-    height: 100vh;
     position: fixed;
     top: 0;
     left: 0;
-    background: var(--brown);
-    color: white;
-    padding: 25px 17px;
+    bottom: 0;
+    z-index: 1000;
+
     display: flex;
     flex-direction: column;
-    z-index: 100;
+
+    width: var(--sidebar-width);
+    padding: 28px 25px 20px;
+
+    color: white;
+    background: var(--brown-dark);
+    overflow-y: auto;
 }
 
 .brand {
     display: flex;
     align-items: center;
-    gap: 11px;
-    padding: 5px 8px 30px;
+    gap: 13px;
+    padding: 10px 8px 0;
+    margin-bottom: 65px;
 }
 
 .brand-icon {
-    font-size: 29px;
+    font-size: 39px;
+    line-height: 1;
 }
 
-.brand h2 {
-    font-family: 'Playfair Display', serif;
-    font-size: 19px;
+.brand-name {
+    margin: 0;
+    color: #fff;
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 23px;
+    line-height: 1.15;
 }
 
-.brand small {
-    display: block;
-    color: #d7c5b3;
-    font-size: 10px;
-    margin-top: 3px;
-    letter-spacing: 1px;
+.brand-subtitle {
+    margin: 5px 0 0;
+    color: #e7cbb3;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .12em;
 }
 
-.nav-label {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 1.5px;
-    color: #c5ad98;
-    padding: 12px 12px;
+.menu-label {
+    margin: 0 0 17px 17px;
+    color: #d3b69c;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .14em;
 }
 
-.sidebar a {
+.nav-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.nav-link {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 13px 14px;
-    margin-bottom: 5px;
-    color: #f5ece4;
+    gap: 17px;
+    min-height: 57px;
+    padding: 12px 17px;
+
+    color: #fff;
     text-decoration: none;
-    border-radius: 9px;
-    font-size: 13px;
-    font-weight: 500;
-    transition: .2s;
+
+    border-radius: 14px;
+    border-left: 4px solid transparent;
+
+    font-size: 15px;
+    font-weight: 600;
+    transition: .2s ease;
 }
 
-.sidebar a:hover,
-.sidebar a.active {
-    background: var(--brown-light);
-    color: white;
+.nav-link:hover {
+    background: rgba(255,255,255,.10);
 }
 
-.sidebar a.active {
-    box-shadow: inset 3px 0 #f3c78f;
+.nav-link.active {
+    color: #fff;
+    background: #805735;
+    border-left-color: #f0c99d;
 }
 
 .nav-icon {
-    width: 20px;
-    text-align: center;
-    font-size: 16px;
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    width: 22px;
+    font-size: 19px;
 }
 
 .sidebar-bottom {
     margin-top: auto;
-    border-top: 1px solid rgba(255,255,255,.15);
-    padding-top: 15px;
+    padding-top: 22px;
+    border-top: 1px solid rgba(255,255,255,.17);
 }
 
-.logout {
-    background: rgba(168, 62, 50, .8);
+.logout-link {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-height: 57px;
+    padding: 12px 18px;
+
+    color: #fff;
+    background: #a13f30;
+    border-radius: 13px;
+    text-decoration: none;
+
+    font-size: 15px;
+    font-weight: 700;
+    transition: .2s ease;
 }
 
-.logout:hover {
-    background: #a83e32 !important;
+.logout-link:hover {
+    background: #8e3428;
 }
 
-/* MAIN CONTENT */
+/* =================================
+   MAIN CONTENT
+================================= */
 
 .main {
-    margin-left: 250px;
-    padding: 30px 35px;
     min-height: 100vh;
-    max-width: 1700px;
+    margin-left: var(--sidebar-width);
+    padding: 32px;
 }
+
+.content-container {
+    width: 100%;
+    max-width: 1500px;
+    margin: 0 auto;
+}
+
+/* TOPBAR */
 
 .topbar {
     display: flex;
@@ -281,15 +344,16 @@ body {
 }
 
 .page-title h1 {
-    font-family: 'Playfair Display', serif;
+    margin: 0;
+    color: var(--brown-deep);
+    font-family: 'Playfair Display', Georgia, serif;
     font-size: 29px;
-    color: var(--brown);
 }
 
 .page-title p {
-    font-size: 13px;
-    color: var(--muted);
     margin-top: 5px;
+    color: var(--muted);
+    font-size: 13px;
 }
 
 .user-info {
@@ -299,14 +363,14 @@ body {
 }
 
 .user-avatar {
+    display: flex;
+    justify-content: center;
+    align-items: center;
     width: 43px;
     height: 43px;
     border-radius: 50%;
     background: #e9d8c5;
     color: var(--brown);
-    display: flex;
-    justify-content: center;
-    align-items: center;
     font-size: 17px;
     font-weight: 800;
 }
@@ -324,10 +388,10 @@ body {
 }
 
 .role-badge {
-    background: #eee3d5;
-    color: var(--brown);
     padding: 5px 9px;
     border-radius: 20px;
+    background: #eee3d5;
+    color: var(--brown);
     font-size: 10px;
     font-weight: 700;
 }
@@ -335,22 +399,23 @@ body {
 /* WELCOME BANNER */
 
 .welcome-banner {
-    background: linear-gradient(115deg, #59391f, #805633);
-    color: white;
-    padding: 27px 30px;
-    border-radius: 15px;
-    margin-bottom: 25px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 15px;
+    padding: 27px 30px;
+    margin-bottom: 25px;
     overflow: hidden;
+
+    color: white;
+    background: linear-gradient(115deg, #59391f, #805633);
+    border-radius: 15px;
 }
 
 .welcome-banner h2 {
+    margin: 0 0 7px;
     font-family: 'Playfair Display', serif;
     font-size: 23px;
-    margin-bottom: 7px;
 }
 
 .welcome-banner p {
@@ -370,13 +435,14 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin: 27px 0 15px;
     gap: 10px;
+    margin: 27px 0 15px;
 }
 
 .section-heading h2 {
-    font-size: 16px;
+    margin: 0;
     color: var(--brown);
+    font-size: 16px;
 }
 
 .section-heading span {
@@ -393,12 +459,12 @@ body {
 }
 
 .stat-card {
-    background: white;
-    padding: 20px;
-    border-radius: 13px;
-    border: 1px solid var(--border);
-    box-shadow: 0 3px 12px rgba(55, 35, 18, .035);
     min-width: 0;
+    padding: 20px;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 13px;
+    box-shadow: 0 3px 12px rgba(55,35,18,.035);
 }
 
 .stat-top {
@@ -415,43 +481,32 @@ body {
 }
 
 .stat-icon {
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
     font-size: 17px;
 }
 
-.icon-brown {
-    background: #f2e7db;
-}
-
-.icon-green {
-    background: #e3f2e8;
-}
-
-.icon-orange {
-    background: #fff0db;
-}
-
-.icon-red {
-    background: #fce8e6;
-}
+.icon-brown { background: #f2e7db; }
+.icon-green { background: #e3f2e8; }
+.icon-orange { background: #fff0db; }
+.icon-red { background: #fce8e6; }
 
 .stat-value {
+    margin-top: 15px;
     color: var(--brown);
     font-size: 25px;
     font-weight: 800;
-    margin-top: 15px;
     overflow-wrap: anywhere;
 }
 
 .stat-note {
-    font-size: 10px;
-    color: var(--muted);
     margin-top: 5px;
+    color: var(--muted);
+    font-size: 10px;
 }
 
 /* QUICK ACTIONS */
@@ -463,45 +518,47 @@ body {
 }
 
 .action-card {
-    background: white;
-    border: 1px solid var(--border);
-    padding: 17px;
-    border-radius: 11px;
-    text-decoration: none;
-    color: var(--text);
-    transition: .2s;
     display: flex;
     align-items: center;
     gap: 13px;
+    padding: 17px;
+
+    color: var(--text);
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    text-decoration: none;
+    transition: .2s;
 }
 
 .action-card:hover {
     transform: translateY(-3px);
-    box-shadow: 0 5px 15px rgba(55, 35, 18, .08);
+    box-shadow: 0 5px 15px rgba(55,35,18,.08);
     border-color: #d7b999;
 }
 
 .action-icon {
-    width: 40px;
-    height: 40px;
-    background: #f5eee6;
-    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    background: #f5eee6;
+    border-radius: 10px;
     font-size: 19px;
 }
 
 .action-card strong {
-    font-size: 12px;
     display: block;
+    font-size: 12px;
 }
 
 .action-card small {
     display: block;
+    margin-top: 4px;
     color: var(--muted);
     font-size: 10px;
-    margin-top: 4px;
 }
 
 /* CONTENT GRID */
@@ -514,11 +571,11 @@ body {
 }
 
 .panel {
+    min-width: 0;
+    padding: 21px;
     background: white;
     border: 1px solid var(--border);
     border-radius: 13px;
-    padding: 21px;
-    min-width: 0;
 }
 
 .panel-header {
@@ -535,39 +592,39 @@ body {
 }
 
 .panel-header span {
-    font-size: 10px;
     color: var(--muted);
+    font-size: 10px;
 }
 
 /* SALES CHART */
 
 .chart {
-    height: 190px;
     display: flex;
     align-items: flex-end;
     justify-content: space-around;
     gap: 12px;
+    height: 190px;
     padding-top: 15px;
     border-bottom: 1px solid var(--border);
 }
 
 .chart-column {
-    flex: 1;
-    height: 100%;
     display: flex;
+    flex: 1;
     flex-direction: column;
     align-items: center;
     justify-content: flex-end;
     gap: 8px;
     min-width: 0;
+    height: 100%;
 }
 
 .bar-area {
-    height: 145px;
-    width: 100%;
     display: flex;
     align-items: flex-end;
     justify-content: center;
+    width: 100%;
+    height: 145px;
 }
 
 .bar {
@@ -588,17 +645,18 @@ body {
 }
 
 .chart-day {
-    font-size: 10px;
-    color: var(--muted);
     padding-bottom: 9px;
+    color: var(--muted);
+    font-size: 10px;
 }
 
 .chart-legend {
-    margin-top: 13px;
-    font-size: 10px;
-    color: var(--muted);
     display: flex;
     justify-content: space-between;
+    gap: 10px;
+    margin-top: 13px;
+    color: var(--muted);
+    font-size: 10px;
 }
 
 /* LOW STOCK */
@@ -619,8 +677,8 @@ body {
 }
 
 .stock-item:last-child {
-    border-bottom: none;
     padding-bottom: 0;
+    border-bottom: none;
 }
 
 .stock-name {
@@ -629,36 +687,36 @@ body {
 }
 
 .stock-minimum {
+    margin-top: 4px;
     color: var(--muted);
     font-size: 10px;
-    margin-top: 4px;
 }
 
 .stock-quantity {
-    font-size: 11px;
-    font-weight: 700;
+    padding: 6px 9px;
     color: #a83e32;
     background: #fce8e6;
-    padding: 6px 9px;
     border-radius: 7px;
+    font-size: 11px;
+    font-weight: 700;
     white-space: nowrap;
 }
 
 .empty-message {
-    text-align: center;
     padding: 22px 10px;
     color: var(--muted);
     font-size: 12px;
+    text-align: center;
 }
 
 /* RECENT SALES TABLE */
 
 .table-panel {
+    padding: 21px;
     margin-top: 20px;
     background: white;
     border: 1px solid var(--border);
     border-radius: 13px;
-    padding: 21px;
 }
 
 .table-wrapper {
@@ -668,21 +726,22 @@ body {
 
 table {
     width: 100%;
-    border-collapse: collapse;
     min-width: 550px;
+    border-collapse: collapse;
 }
 
-th, td {
-    text-align: left;
+th,
+td {
     padding: 13px 12px;
+    text-align: left;
     border-bottom: 1px solid var(--border);
     font-size: 11px;
 }
 
 th {
     color: var(--muted);
-    font-weight: 700;
     background: #faf8f5;
+    font-weight: 700;
 }
 
 td {
@@ -690,8 +749,8 @@ td {
 }
 
 td.amount {
-    font-weight: 700;
     color: var(--brown);
+    font-weight: 700;
 }
 
 .sale-id {
@@ -702,9 +761,9 @@ td.amount {
 .status {
     display: inline-block;
     padding: 5px 9px;
-    border-radius: 20px;
-    background: #e3f2e8;
     color: #34734a;
+    background: #e3f2e8;
+    border-radius: 20px;
     font-size: 9px;
     font-weight: 700;
 }
@@ -714,31 +773,89 @@ td.amount {
 .footer {
     margin-top: 30px;
     padding: 15px 0;
-    border-top: 1px solid var(--border);
     color: var(--muted);
+    border-top: 1px solid var(--border);
     font-size: 10px;
     text-align: center;
 }
 
-/* RESPONSIVE */
+/* =================================
+   RESPONSIVE - SAME AS CATEGORIES
+================================= */
 
-@media (max-width: 1150px) {
-    .stats-grid {
-        grid-template-columns: repeat(2, 1fr);
+@media (max-width: 1100px) {
+
+    :root {
+        --sidebar-width: 225px;
+    }
+
+    .sidebar {
+        padding-left: 18px;
+        padding-right: 18px;
     }
 
     .main {
-        padding: 25px;
+        padding: 24px;
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
 
-@media (max-width: 850px) {
+@media (max-width: 800px) {
+
+    :root {
+        --sidebar-width: 190px;
+    }
+
     .sidebar {
-        width: 210px;
+        padding: 20px 12px;
+    }
+
+    .brand {
+        gap: 8px;
+        padding-left: 4px;
+        margin-bottom: 40px;
+    }
+
+    .brand-icon {
+        font-size: 30px;
+    }
+
+    .brand-name {
+        font-size: 18px;
+    }
+
+    .brand-subtitle {
+        font-size: 9px;
+    }
+
+    .nav-link {
+        gap: 10px;
+        padding: 10px;
+        font-size: 13px;
     }
 
     .main {
-        margin-left: 210px;
+        padding: 20px 15px;
+    }
+
+    .stats-grid {
+        gap: 10px;
+    }
+
+    .stat-card {
+        padding: 16px;
+    }
+
+    .stat-value {
+        font-size: 27px;
+    }
+
+    .panel,
+    .table-panel {
+        padding: 18px;
     }
 
     .content-grid {
@@ -746,49 +863,64 @@ td.amount {
     }
 }
 
-@media (max-width: 650px) {
+@media (max-width: 620px) {
+
     .sidebar {
         position: relative;
         width: 100%;
         height: auto;
-        padding: 15px;
+        padding: 16px;
     }
 
     .brand {
-        padding-bottom: 12px;
+        margin-bottom: 20px;
     }
 
-    .sidebar .nav-label {
-        display: none;
+    .menu-label {
+        margin-bottom: 10px;
     }
 
-    .sidebar nav {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 5px;
+    .nav-menu {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 7px;
     }
 
-    .sidebar nav a {
-        flex: 1 1 135px;
-        margin: 0;
-        padding: 11px;
+    .nav-link {
+        min-height: 43px;
+        gap: 7px;
+        padding: 8px;
+        font-size: 11px;
+        border-radius: 9px;
+    }
+
+    .nav-icon {
+        width: 17px;
+        font-size: 15px;
     }
 
     .sidebar-bottom {
-        margin-top: 12px;
+        margin-top: 15px;
+        padding-top: 12px;
     }
 
-    .sidebar-bottom a {
-        margin: 0;
+    .logout-link {
+        min-height: 43px;
+        padding: 9px 13px;
+        font-size: 12px;
     }
 
     .main {
         margin-left: 0;
-        padding: 18px;
+        padding: 17px 12px;
     }
 
     .topbar {
         align-items: flex-start;
+    }
+
+    .page-title h1 {
+        font-size: 27px;
     }
 
     .welcome-banner {
@@ -804,16 +936,16 @@ td.amount {
     }
 
     .stats-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: 1fr;
         gap: 10px;
     }
 
     .stat-card {
-        padding: 14px;
+        padding: 17px;
     }
 
     .stat-value {
-        font-size: 20px;
+        font-size: 28px;
     }
 
     .quick-actions {
@@ -822,81 +954,100 @@ td.amount {
 
     .panel,
     .table-panel {
-        padding: 15px;
+        padding: 14px;
+    }
+
+    .section-heading {
+        align-items: flex-start;
+        flex-direction: column;
     }
 }
 
-@media (max-width: 370px) {
+@media (max-width: 360px) {
+
+    .nav-menu {
+        grid-template-columns: 1fr;
+    }
+
     .stats-grid {
         grid-template-columns: 1fr;
     }
 }
+
 </style>
 </head>
 
 <body>
 
-<!-- SIDEBAR -->
+<!-- SIDEBAR - EXACT CATEGORIES STRUCTURE -->
 
 <aside class="sidebar">
 
     <div class="brand">
+
         <span class="brand-icon">🥐</span>
 
         <div>
-            <h2>Bakery System</h2>
-            <small>SALES & INVENTORY</small>
+            <h2 class="brand-name">Bakery System</h2>
+            <p class="brand-subtitle">SALES & INVENTORY</p>
         </div>
+
     </div>
 
-    <div class="nav-label">MAIN MENU</div>
+    <p class="menu-label">MAIN MENU</p>
 
-    <nav>
-        <a href="dashboard.php" class="active">
+    <nav class="nav-menu">
+
+        <a href="dashboard.php" class="nav-link active" aria-current="page">
             <span class="nav-icon">▦</span>
             Dashboard
         </a>
 
-        <a href="products.php">
-            <span class="nav-icon">🍞</span>
+        <a href="products.php" class="nav-link">
+            <span class="nav-icon">📦</span>
             Products
         </a>
 
         <?php if ($isAdmin): ?>
-        <a href="categories.php">
-            <span class="nav-icon">▤</span>
-            Categories
-        </a>
+            <a href="categories.php" class="nav-link">
+                <span class="nav-icon">▤</span>
+                Categories
+            </a>
         <?php endif; ?>
 
-        <a href="inventory.php">
+        <a href="inventory.php" class="nav-link">
             <span class="nav-icon">📦</span>
             Inventory
         </a>
 
-        <a href="sales.php">
+        <a href="sales.php" class="nav-link">
             <span class="nav-icon">🛒</span>
             Sales / POS
         </a>
 
         <?php if ($isAdmin): ?>
-        <a href="reports.php">
-            <span class="nav-icon">📊</span>
-            Reports
-        </a>
 
-        <a href="user_management.php">
-            <span class="nav-icon">👥</span>
-            User Management
-        </a>
+            <a href="reports.php" class="nav-link">
+                <span class="nav-icon">📊</span>
+                Reports
+            </a>
+
+            <a href="user_management.php" class="nav-link">
+                <span class="nav-icon">👥</span>
+                User Management
+            </a>
+
         <?php endif; ?>
+
     </nav>
 
     <div class="sidebar-bottom">
-        <a href="../logout.php" class="logout">
+
+        <a href="../logout.php" class="logout-link">
             <span class="nav-icon">↪</span>
             Logout
         </a>
+
     </div>
 
 </aside>
@@ -904,6 +1055,8 @@ td.amount {
 <!-- MAIN CONTENT -->
 
 <main class="main">
+
+<div class="content-container">
 
     <!-- TOPBAR -->
 
@@ -921,12 +1074,15 @@ td.amount {
             </div>
 
             <div class="user-details">
+
                 <strong><?= $name ?></strong>
+
                 <span>
                     <span class="role-badge">
                         <?= $isAdmin ? 'ADMINISTRATOR' : 'STAFF' ?>
                     </span>
                 </span>
+
             </div>
 
         </div>
@@ -962,7 +1118,6 @@ td.amount {
     <section class="stats-grid">
 
         <div class="stat-card">
-
             <div class="stat-top">
                 <span class="stat-label">Today's Sales</span>
                 <span class="stat-icon icon-green">₱</span>
@@ -975,11 +1130,9 @@ td.amount {
             <div class="stat-note">
                 Total revenue for today
             </div>
-
         </div>
 
         <div class="stat-card">
-
             <div class="stat-top">
                 <span class="stat-label">Monthly Sales</span>
                 <span class="stat-icon icon-brown">📈</span>
@@ -992,11 +1145,9 @@ td.amount {
             <div class="stat-note">
                 Sales this month
             </div>
-
         </div>
 
         <div class="stat-card">
-
             <div class="stat-top">
                 <span class="stat-label">Today's Transactions</span>
                 <span class="stat-icon icon-orange">🧾</span>
@@ -1009,11 +1160,9 @@ td.amount {
             <div class="stat-note">
                 Completed sales recorded today
             </div>
-
         </div>
 
         <div class="stat-card">
-
             <div class="stat-top">
                 <span class="stat-label">Total Products</span>
                 <span class="stat-icon icon-brown">🍞</span>
@@ -1026,7 +1175,6 @@ td.amount {
             <div class="stat-note">
                 Registered bakery products
             </div>
-
         </div>
 
     </section>
@@ -1041,7 +1189,6 @@ td.amount {
     <section class="stats-grid">
 
         <div class="stat-card">
-
             <div class="stat-top">
                 <span class="stat-label">Available Stock</span>
                 <span class="stat-icon icon-green">📦</span>
@@ -1054,11 +1201,9 @@ td.amount {
             <div class="stat-note">
                 Total units currently in inventory
             </div>
-
         </div>
 
         <div class="stat-card">
-
             <div class="stat-top">
                 <span class="stat-label">Low Stock Products</span>
                 <span class="stat-icon icon-orange">⚠️</span>
@@ -1071,11 +1216,9 @@ td.amount {
             <div class="stat-note">
                 Products at or below minimum stock
             </div>
-
         </div>
 
         <div class="stat-card">
-
             <div class="stat-top">
                 <span class="stat-label">Out of Stock</span>
                 <span class="stat-icon icon-red">❌</span>
@@ -1088,11 +1231,9 @@ td.amount {
             <div class="stat-note">
                 Products with no available stock
             </div>
-
         </div>
 
         <div class="stat-card">
-
             <div class="stat-top">
                 <span class="stat-label">Inventory Status</span>
                 <span class="stat-icon icon-brown">📋</span>
@@ -1107,7 +1248,6 @@ td.amount {
             <div class="stat-note">
                 Products with available stock
             </div>
-
         </div>
 
     </section>
@@ -1193,7 +1333,13 @@ td.amount {
 
             <div class="chart-legend">
                 <span>Daily sales revenue</span>
-                <strong>₱<?= number_format(array_sum(array_column($chartData, 'amount')), 2) ?></strong>
+
+                <strong>
+                    ₱<?= number_format(
+                        array_sum(array_column($chartData, 'amount')),
+                        2
+                    ) ?>
+                </strong>
             </div>
 
         </div>
@@ -1217,12 +1363,18 @@ td.amount {
 
                             <div>
                                 <div class="stock-name">
-                                    <?= htmlspecialchars($item['product_name']) ?>
+                                    <?= htmlspecialchars(
+                                        $item['product_name'],
+                                        ENT_QUOTES,
+                                        'UTF-8'
+                                    ) ?>
                                 </div>
 
                                 <div class="stock-minimum">
                                     Minimum stock:
-                                    <?= number_format((int)$item['minimum_stock']) ?>
+                                    <?= number_format(
+                                        (int)$item['minimum_stock']
+                                    ) ?>
                                 </div>
                             </div>
 
@@ -1239,7 +1391,10 @@ td.amount {
             <?php else: ?>
 
                 <div class="empty-message">
-                    <div style="font-size: 28px; margin-bottom: 8px;">✅</div>
+                    <div style="font-size: 28px; margin-bottom: 8px;">
+                        ✅
+                    </div>
+
                     All products have sufficient stock!
                 </div>
 
@@ -1293,12 +1448,18 @@ td.amount {
                             </td>
 
                             <td class="amount">
-                                ₱<?= number_format((float)$sale['total_amount'], 2) ?>
+                                ₱<?= number_format(
+                                    (float)$sale['total_amount'],
+                                    2
+                                ) ?>
                             </td>
 
                             <td>
                                 <?= htmlspecialchars(
-                                    date('M d, Y h:i A', strtotime($sale['sale_date'])),
+                                    date(
+                                        'M d, Y h:i A',
+                                        strtotime($sale['sale_date'])
+                                    ),
                                     ENT_QUOTES,
                                     'UTF-8'
                                 ) ?>
@@ -1330,11 +1491,14 @@ td.amount {
 
     </section>
 
+    <!-- FOOTER -->
+
     <footer class="footer">
         Bakery Sales and Stock Monitoring System
         &copy; <?= date('Y') ?>. All rights reserved.
     </footer>
 
+</div>
 </main>
 
 </body>

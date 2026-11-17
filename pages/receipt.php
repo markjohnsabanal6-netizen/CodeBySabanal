@@ -1,5 +1,9 @@
 
 <?php
+
+// Follow Windows Pacific Time
+date_default_timezone_set('America/Los_Angeles');
+
 session_start();
 require_once '../config/database.php';
 
@@ -201,8 +205,10 @@ function peso($amount) {
 
     <div class="details">
         <strong>Receipt No:</strong> #<?= (int)$sale['sale_id'] ?><br>
+
         <strong>Date:</strong>
         <?= htmlspecialchars(date('M d, Y h:i A', strtotime($sale['sale_date']))) ?><br>
+        
         <strong>Cashier:</strong>
         <?= htmlspecialchars($sale['full_name']) ?>
     </div>

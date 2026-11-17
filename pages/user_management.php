@@ -303,225 +303,1036 @@ $stmt = $conn->query("
 
 $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// User summary
+$totalUsers = count($users);
+$activeUsers = 0;
+$inactiveUsers = 0;
+$adminUsers = 0;
+$staffUsers = 0;
+
+foreach ($users as $user) {
+
+    if ($user['status'] === 'active') {
+        $activeUsers++;
+    } else {
+        $inactiveUsers++;
+    }
+
+    if ($user['role'] === 'admin') {
+        $adminUsers++;
+    } elseif ($user['role'] === 'staff') {
+        $staffUsers++;
+    }
+}
+
 $message = $_GET['message'] ?? '';
+
+$name = e($_SESSION['full_name'] ?? 'User');
 ?>
 
 <!DOCTYPE html>
 <html lang="en">
 <head>
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <title>User Management | Bakery System</title>
 
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+
 <style>
+
+:root {
+    --brown: #68452f;
+    --brown-dark: #503321;
+    --brown-light: #805735;
+    --cream: #f7f3ee;
+    --cream-dark: #eee4d9;
+    --text: #30271f;
+    --muted: #8b8178;
+    --white: #ffffff;
+    --green: #198754;
+    --red: #dc3545;
+    --blue: #416d9e;
+}
+
 * {
     box-sizing: border-box;
 }
 
+html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 110px;
+}
+
 body {
     margin: 0;
-    font-family: Arial, sans-serif;
-    background: #f4f6f9;
-    color: #333;
+    font-family: 'DM Sans', Arial, sans-serif;
+    background: #f5f2ee;
+    color: var(--text);
 }
 
-.container {
-    max-width: 1200px;
-    margin: 30px auto;
-    padding: 20px;
+/* =========================
+   STICKY TOP HEADER
+========================= */
+
+.top-header {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    width: 100%;
+    background: rgba(255,255,255,.97);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid #e9e1d8;
+    box-shadow: 0 3px 15px rgba(55,35,20,.06);
 }
 
-.header {
+.header-inner {
+    max-width: 1500px;
+    margin: auto;
+    min-height: 82px;
+    padding: 12px 35px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 15px;
-    flex-wrap: wrap;
-    margin-bottom: 25px;
+    gap: 20px;
 }
 
-.header h2 {
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+}
+
+.brand-icon {
+    width: 45px;
+    height: 45px;
+    min-width: 45px;
+    border-radius: 13px;
+    background: #eee0d1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+}
+
+.brand-text h2 {
     margin: 0;
-    color: #333;
+    font-family: 'Playfair Display', serif;
+    font-size: 22px;
+    color: #583a27;
 }
 
-.back-btn {
-    background: #555;
-    color: white;
-    padding: 10px 16px;
-    text-decoration: none;
-    border-radius: 6px;
+.brand-text p {
+    margin: 4px 0 0;
+    color: #98806c;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .13em;
+    text-transform: uppercase;
 }
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.header-user {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-right: 15px;
+    border-right: 1px solid #e9e1d8;
+}
+
+.user-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: #eee0d1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 17px;
+}
+
+.user-info strong {
+    display: block;
+    color: #493426;
+    font-size: 13px;
+}
+
+.user-info span {
+    display: block;
+    margin-top: 3px;
+    color: #988b80;
+    font-size: 11px;
+}
+
+.header-btn {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 16px;
+    border-radius: 9px;
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 700;
+    transition: .2s ease;
+    white-space: nowrap;
+}
+
+.dashboard-btn {
+    background: #68452f;
+    color: white;
+}
+
+.dashboard-btn:hover {
+    background: #503321;
+}
+
+.logout-btn {
+    background: #f5e9e5;
+    color: #a13f30;
+}
+
+.logout-btn:hover {
+    background: #eed8d2;
+}
+
+/* =========================
+   MAIN CONTAINER
+========================= */
+
+.main-content {
+    max-width: 1500px;
+    margin: auto;
+    padding: 35px;
+}
+
+.page-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 15px;
+    margin-bottom: 28px;
+}
+
+.page-heading h1 {
+    margin: 0;
+    font-family: 'Playfair Display', serif;
+    font-size: 31px;
+    color: #493426;
+}
+
+.page-heading p {
+    margin: 8px 0 0;
+    color: #8b8178;
+    font-size: 14px;
+}
+
+.date-label {
+    color: #8b8178;
+    font-size: 12px;
+    background: white;
+    border: 1px solid #eee6dd;
+    padding: 10px 14px;
+    border-radius: 9px;
+}
+
+/* =========================
+   ALERTS
+========================= */
+
+.alert {
+    padding: 14px 17px;
+    border-radius: 10px;
+    margin-bottom: 22px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.success {
+    background: #e1f1e6;
+    color: #23613c;
+    border: 1px solid #c8e5d1;
+}
+
+.error {
+    background: #f9e3e1;
+    color: #9b342d;
+    border: 1px solid #f0ceca;
+}
+
+/* =========================
+   SUMMARY CARDS
+========================= */
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 17px;
+    margin-bottom: 28px;
+}
+
+.summary-card {
+    background: white;
+    padding: 20px;
+    border-radius: 14px;
+    border: 1px solid #eee7df;
+    box-shadow: 0 3px 12px rgba(65,43,26,.035);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+}
+
+.summary-icon {
+    width: 46px;
+    height: 46px;
+    min-width: 46px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 21px;
+}
+
+.icon-brown {
+    background: #f0e5da;
+}
+
+.icon-green {
+    background: #e1f0e5;
+}
+
+.icon-red {
+    background: #f8e5e2;
+}
+
+.icon-blue {
+    background: #e4edf7;
+}
+
+.icon-gold {
+    background: #f8f0dc;
+}
+
+.summary-info {
+    min-width: 0;
+}
+
+.summary-info span {
+    display: block;
+    color: #8b8178;
+    font-size: 11px;
+    font-weight: 600;
+    margin-bottom: 5px;
+}
+
+.summary-info h3 {
+    margin: 0;
+    color: #443326;
+    font-size: 25px;
+    font-weight: 800;
+}
+
+/* =========================
+   CARDS
+========================= */
 
 .card {
     background: white;
-    padding: 22px;
-    border-radius: 10px;
+    padding: 25px;
+    border-radius: 15px;
     margin-bottom: 25px;
-    box-shadow: 0 2px 8px rgba(0,0,0,.06);
+    border: 1px solid #eee8e1;
+    box-shadow: 0 3px 12px rgba(65,43,26,.045);
 }
 
-.card h3 {
-    margin-top: 0;
+.card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 22px;
 }
+
+.card-header h3 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 800;
+    color: #493426;
+}
+
+.card-description {
+    color: #988b80;
+    font-size: 12px;
+    margin: 6px 0 0;
+}
+
+.section-tag {
+    display: inline-block;
+    padding: 7px 11px;
+    border-radius: 20px;
+    background: #f5eee7;
+    color: #79583e;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .04em;
+}
+
+/* =========================
+   FORM
+========================= */
 
 .form-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 15px;
+    gap: 19px;
 }
 
 .form-group label {
     display: block;
-    margin-bottom: 7px;
-    font-weight: bold;
+    margin-bottom: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #514235;
 }
 
 .form-group input,
 .form-group select {
     width: 100%;
-    padding: 11px;
-    border: 1px solid #ccc;
-    border-radius: 6px;
-    font-size: 15px;
+    padding: 13px 14px;
+    border: 1px solid #ded5cb;
+    border-radius: 9px;
+    font-family: inherit;
+    font-size: 13px;
+    color: #382d24;
+    background: #fff;
+    outline: none;
+    transition: .2s ease;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+    border-color: #9b704c;
+    box-shadow: 0 0 0 3px rgba(128,87,53,.10);
+}
+
+.form-group input::placeholder {
+    color: #aaa19a;
+}
+
+.form-hint {
+    margin-top: 7px;
+    color: #988b80;
+    font-size: 11px;
+}
+
+.form-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 22px;
 }
 
 button {
     border: none;
     cursor: pointer;
-    padding: 9px 13px;
-    border-radius: 5px;
-    color: white;
+    font-family: inherit;
+    font-weight: 700;
+    transition: .2s ease;
 }
 
 .add-btn {
-    background: #198754;
-    margin-top: 18px;
-    padding: 11px 20px;
+    background: #6d8b52;
+    color: white;
+    padding: 12px 21px;
+    border-radius: 9px;
+    font-size: 13px;
+}
+
+.add-btn:hover {
+    background: #58733f;
 }
 
 .edit-btn {
-    background: #0d6efd;
+    background: #416d9e;
+    color: white;
+    padding: 9px 13px;
+    border-radius: 7px;
+    font-size: 11px;
+}
+
+.edit-btn:hover {
+    background: #31577f;
 }
 
 .activate-btn {
     background: #198754;
+    color: white;
+    padding: 9px 12px;
+    border-radius: 7px;
+    font-size: 11px;
+}
+
+.activate-btn:hover {
+    background: #146c43;
 }
 
 .deactivate-btn {
-    background: #dc3545;
+    background: #bd5148;
+    color: white;
+    padding: 9px 12px;
+    border-radius: 7px;
+    font-size: 11px;
 }
 
-.alert {
-    padding: 13px;
-    border-radius: 6px;
-    margin-bottom: 18px;
+.deactivate-btn:hover {
+    background: #9e3d35;
 }
 
-.success {
-    background: #d1e7dd;
-    color: #0f5132;
+.cancel-btn {
+    background: #77716b;
+    color: white;
+    padding: 11px 17px;
+    border-radius: 8px;
+    font-size: 12px;
 }
 
-.error {
-    background: #f8d7da;
-    color: #842029;
+.cancel-btn:hover {
+    background: #625d58;
+}
+
+/* =========================
+   USERS TABLE
+========================= */
+
+.table-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.table-count {
+    color: #8b8178;
+    font-size: 12px;
 }
 
 .table-wrapper {
+    width: 100%;
     overflow-x: auto;
 }
 
 table {
     width: 100%;
     border-collapse: collapse;
-    min-width: 750px;
+    min-width: 850px;
 }
 
 th, td {
-    padding: 13px;
+    padding: 15px 13px;
     text-align: left;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid #eee9e3;
+    font-size: 12px;
 }
 
 th {
-    background: #f1f3f5;
+    background: #f8f5f1;
+    color: #72563f;
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    white-space: nowrap;
+}
+
+td {
+    color: #51483f;
+}
+
+tbody tr:hover {
+    background: #fcfaf7;
+}
+
+.user-cell {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.user-table-avatar {
+    width: 35px;
+    height: 35px;
+    min-width: 35px;
+    border-radius: 50%;
+    background: #eee2d6;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #77543a;
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.user-cell-info strong {
+    display: block;
+    color: #493426;
+    font-size: 12px;
+}
+
+.user-cell-info span {
+    display: block;
+    color: #a0958b;
+    font-size: 10px;
+    margin-top: 3px;
+}
+
+.role-badge {
+    display: inline-block;
+    padding: 6px 11px;
+    border-radius: 20px;
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: capitalize;
+}
+
+.role-admin {
+    background: #eee5f7;
+    color: #74519a;
+}
+
+.role-staff {
+    background: #e5edf5;
+    color: #416d9e;
 }
 
 .status {
-    padding: 5px 10px;
+    display: inline-block;
+    padding: 6px 11px;
     border-radius: 20px;
-    font-size: 12px;
-    font-weight: bold;
+    font-size: 10px;
+    font-weight: 800;
 }
 
 .status.active {
-    background: #d1e7dd;
-    color: #0f5132;
+    background: #e0f0e5;
+    color: #287345;
 }
 
 .status.inactive {
-    background: #f8d7da;
-    color: #842029;
-}
-
-.role {
-    text-transform: capitalize;
-    font-weight: bold;
+    background: #f8e3e1;
+    color: #a33c35;
 }
 
 .actions {
     display: flex;
     gap: 7px;
     align-items: center;
+    flex-wrap: wrap;
 }
 
 .actions form {
     margin: 0;
 }
 
-@media(max-width: 650px) {
+/* =========================
+   EDIT SECTION
+========================= */
+
+#editSection {
+    border: 1px solid #dfcbb8;
+    background: #fffdfb;
+    scroll-margin-top: 110px;
+}
+
+.edit-actions {
+    display: flex;
+    gap: 9px;
+    flex-wrap: wrap;
+    margin-top: 22px;
+}
+
+/* =========================
+   EMPTY STATE
+========================= */
+
+.empty-state {
+    text-align: center;
+    padding: 40px 15px;
+    color: #8b8178;
+}
+
+.empty-state-icon {
+    display: block;
+    font-size: 38px;
+    margin-bottom: 12px;
+}
+
+.empty-state strong {
+    display: block;
+    color: #594738;
+    font-size: 14px;
+}
+
+/* =========================
+   FOOTER
+========================= */
+
+.page-footer {
+    text-align: center;
+    padding: 10px 0 25px;
+    color: #a0958b;
+    font-size: 11px;
+}
+
+/* =========================
+   RESPONSIVE
+========================= */
+
+@media(max-width: 1100px) {
+
+    .summary-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+
+    .main-content {
+        padding: 28px 24px;
+    }
+}
+
+@media(max-width: 750px) {
+
+    .header-inner {
+        padding: 12px 18px;
+    }
+
+    .main-content {
+        padding: 22px 17px;
+    }
+
+    .summary-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .header-user {
+        display: none;
+    }
+
+    .page-heading h1 {
+        font-size: 26px;
+    }
+}
+
+@media(max-width: 550px) {
+
+    .header-inner {
+        min-height: 70px;
+        padding: 10px 13px;
+        gap: 8px;
+    }
+
+    .brand {
+        gap: 8px;
+    }
+
+    .brand-icon {
+        width: 37px;
+        height: 37px;
+        min-width: 37px;
+        font-size: 19px;
+    }
+
+    .brand-text h2 {
+        font-size: 16px;
+    }
+
+    .brand-text p {
+        font-size: 8px;
+    }
+
+    .header-actions {
+        gap: 6px;
+    }
+
+    .header-btn {
+        padding: 9px 10px;
+        font-size: 10px;
+        gap: 5px;
+    }
+
+    .main-content {
+        padding: 20px 13px;
+    }
+
+    .page-heading {
+        align-items: flex-start;
+    }
+
+    .page-heading h1 {
+        font-size: 24px;
+    }
+
+    .page-heading p {
+        font-size: 12px;
+    }
+
+    .summary-grid {
+        gap: 10px;
+    }
+
+    .summary-card {
+        padding: 13px;
+        gap: 9px;
+    }
+
+    .summary-icon {
+        width: 36px;
+        height: 36px;
+        min-width: 36px;
+        font-size: 17px;
+    }
+
+    .summary-info span {
+        font-size: 9px;
+    }
+
+    .summary-info h3 {
+        font-size: 20px;
+    }
+
+    .card {
+        padding: 17px;
+        border-radius: 12px;
+    }
+
     .form-grid {
         grid-template-columns: 1fr;
     }
 
-    .container {
-        padding: 12px;
+    .card-header h3 {
+        font-size: 16px;
+    }
+
+    .date-label {
+        font-size: 10px;
     }
 }
+
+@media(max-width: 350px) {
+
+    .brand-text h2 {
+        font-size: 14px;
+    }
+
+    .brand-text p {
+        font-size: 7px;
+    }
+
+    .header-btn {
+        padding: 8px;
+        font-size: 9px;
+    }
+
+    .summary-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 </style>
 </head>
 
 <body>
 
-<div class="container">
+<!-- =========================
+     STICKY HEADER
+========================= -->
 
-    <div class="header">
-        <h2>User Management</h2>
+<header class="top-header">
 
-        <a href="dashboard.php" class="back-btn">
-            ← Back to Dashboard
-        </a>
+    <div class="header-inner">
+
+        <div class="brand">
+
+            <div class="brand-icon">🥐</div>
+
+            <div class="brand-text">
+                <h2>Bakery System</h2>
+                <p>Sales & Inventory</p>
+            </div>
+
+        </div>
+
+        <div class="header-actions">
+
+            <div class="header-user">
+
+                <div class="user-avatar">👤</div>
+
+                <div class="user-info">
+                    <strong><?= $name ?></strong>
+                    <span>Administrator</span>
+                </div>
+
+            </div>
+
+            <a href="dashboard.php" class="header-btn dashboard-btn">
+                ← Back to Dashboard
+            </a>
+
+            <a href="../logout.php"
+               class="header-btn logout-btn"
+               onclick="return confirm('Are you sure you want to logout?');">
+                ↪ Logout
+            </a>
+
+        </div>
+
     </div>
 
+</header>
+
+
+<!-- =========================
+     MAIN CONTENT
+========================= -->
+
+<main class="main-content">
+
+    <!-- PAGE HEADING -->
+    <div class="page-heading">
+
+        <div>
+            <h1>User Management</h1>
+
+            <p>
+                Manage system accounts, roles, and user access.
+            </p>
+        </div>
+
+        <div class="date-label">
+            📅 <?= date('F d, Y') ?>
+        </div>
+
+    </div>
+
+
+    <!-- SUCCESS MESSAGE -->
     <?php if ($message): ?>
+
         <div class="alert success">
-            <?= e($message) ?>
+            ✓ <?= e($message) ?>
         </div>
+
     <?php endif; ?>
 
+
+    <!-- ERROR MESSAGE -->
     <?php if ($error): ?>
+
         <div class="alert error">
-            <?= e($error) ?>
+            ⚠ <?= e($error) ?>
         </div>
+
     <?php endif; ?>
 
 
-    <!-- ADD NEW USER -->
+    <!-- =========================
+         USER SUMMARY
+    ========================= -->
+
+    <div class="summary-grid">
+
+        <div class="summary-card">
+
+            <div class="summary-icon icon-brown">👥</div>
+
+            <div class="summary-info">
+                <span>Total Users</span>
+                <h3><?= number_format($totalUsers) ?></h3>
+            </div>
+
+        </div>
+
+        <div class="summary-card">
+
+            <div class="summary-icon icon-green">✓</div>
+
+            <div class="summary-info">
+                <span>Active Users</span>
+                <h3><?= number_format($activeUsers) ?></h3>
+            </div>
+
+        </div>
+
+        <div class="summary-card">
+
+            <div class="summary-icon icon-red">⊘</div>
+
+            <div class="summary-info">
+                <span>Inactive Users</span>
+                <h3><?= number_format($inactiveUsers) ?></h3>
+            </div>
+
+        </div>
+
+        <div class="summary-card">
+
+            <div class="summary-icon icon-gold">♙</div>
+
+            <div class="summary-info">
+                <span>Administrators</span>
+                <h3><?= number_format($adminUsers) ?></h3>
+            </div>
+
+        </div>
+
+        <div class="summary-card">
+
+            <div class="summary-icon icon-blue">♧</div>
+
+            <div class="summary-info">
+                <span>Staff Members</span>
+                <h3><?= number_format($staffUsers) ?></h3>
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- =========================
+         ADD NEW USER
+    ========================= -->
+
     <div class="card">
 
-        <h3>Add New User</h3>
+        <div class="card-header">
+
+            <div>
+                <h3>+ Add New User</h3>
+
+                <p class="card-description">
+                    Create a new account for your bakery system.
+                </p>
+            </div>
+
+            <span class="section-tag">ACCOUNT CREATION</span>
+
+        </div>
 
         <form method="POST"
               id="addUserForm"
@@ -553,6 +1364,7 @@ th {
             <div class="form-grid">
 
                 <div class="form-group">
+
                     <label>Full Name</label>
 
                     <input type="text"
@@ -560,9 +1372,11 @@ th {
                            placeholder="Enter full name"
                            autocomplete="off"
                            required>
+
                 </div>
 
                 <div class="form-group">
+
                     <label>Username</label>
 
                     <input type="text"
@@ -572,9 +1386,11 @@ th {
                            readonly
                            onfocus="this.removeAttribute('readonly')"
                            required>
+
                 </div>
 
                 <div class="form-group">
+
                     <label>Password</label>
 
                     <input type="password"
@@ -585,47 +1401,89 @@ th {
                            readonly
                            onfocus="this.removeAttribute('readonly')"
                            required>
+
+                    <div class="form-hint">
+                        Minimum of 8 characters.
+                    </div>
+
                 </div>
 
                 <div class="form-group">
-                    <label>Role</label>
+
+                    <label>Account Role</label>
 
                     <select name="role" required>
                         <option value="staff" selected>Staff</option>
                         <option value="admin">Admin</option>
                     </select>
+
+                    <div class="form-hint">
+                        Select the access level for this account.
+                    </div>
+
                 </div>
 
             </div>
 
-            <button type="submit" class="add-btn">
-                + Add User
-            </button>
+            <div class="form-actions">
+
+                <button type="submit" class="add-btn">
+                    + Create Account
+                </button>
+
+            </div>
 
         </form>
 
     </div>
 
 
-    <!-- REGISTERED USERS -->
+    <!-- =========================
+         REGISTERED USERS
+    ========================= -->
+
     <div class="card">
 
-        <h3>Registered Users</h3>
+        <div class="card-header">
+
+            <div>
+                <h3>Registered Users</h3>
+
+                <p class="card-description">
+                    View and manage all registered system accounts.
+                </p>
+            </div>
+
+            <span class="section-tag">
+                <?= number_format($totalUsers) ?> ACCOUNTS
+            </span>
+
+        </div>
+
+        <div class="table-toolbar">
+
+            <div class="table-count">
+                Showing <?= number_format($totalUsers) ?> registered account(s)
+            </div>
+
+        </div>
 
         <div class="table-wrapper">
 
             <table>
 
                 <thead>
+
                     <tr>
                         <th>ID</th>
-                        <th>Full Name</th>
+                        <th>User Information</th>
                         <th>Username</th>
                         <th>Role</th>
                         <th>Status</th>
                         <th>Date Created</th>
                         <th>Actions</th>
                     </tr>
+
                 </thead>
 
                 <tbody>
@@ -636,20 +1494,52 @@ th {
 
                     <tr>
 
-                        <td><?= e($user['user_id']) ?></td>
-
-                        <td><?= e($user['full_name']) ?></td>
-
-                        <td><?= e($user['username']) ?></td>
-
-                        <td class="role">
-                            <?= e($user['role']) ?>
+                        <td>
+                            #<?= e($user['user_id']) ?>
                         </td>
 
                         <td>
+
+                            <div class="user-cell">
+
+                                <div class="user-table-avatar">
+                                    <?= e(strtoupper(substr($user['full_name'], 0, 1))) ?>
+                                </div>
+
+                                <div class="user-cell-info">
+
+                                    <strong>
+                                        <?= e($user['full_name']) ?>
+                                    </strong>
+
+                                    <span>
+                                        User Account
+                                    </span>
+
+                                </div>
+
+                            </div>
+
+                        </td>
+
+                        <td>
+                            <?= e($user['username']) ?>
+                        </td>
+
+                        <td>
+
+                            <span class="role-badge <?= $user['role'] === 'admin' ? 'role-admin' : 'role-staff' ?>">
+                                <?= e($user['role']) ?>
+                            </span>
+
+                        </td>
+
+                        <td>
+
                             <span class="status <?= e($user['status']) ?>">
                                 <?= e(ucfirst($user['status'])) ?>
                             </span>
+
                         </td>
 
                         <td>
@@ -671,7 +1561,9 @@ th {
                                             "role" => $user["role"]
                                         ], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) ?>
                                     )'>
+
                                     Edit
+
                                 </button>
 
                                 <?php if ((int)$user['user_id'] !== (int)$_SESSION['user_id']): ?>
@@ -722,7 +1614,23 @@ th {
                 <?php else: ?>
 
                     <tr>
-                        <td colspan="7">No users found.</td>
+
+                        <td colspan="7">
+
+                            <div class="empty-state">
+
+                                <span class="empty-state-icon">👥</span>
+
+                                <strong>No users found.</strong>
+
+                                <p>
+                                    No registered accounts are available.
+                                </p>
+
+                            </div>
+
+                        </td>
+
                     </tr>
 
                 <?php endif; ?>
@@ -736,10 +1644,25 @@ th {
     </div>
 
 
-    <!-- EDIT USER -->
+    <!-- =========================
+         EDIT USER
+    ========================= -->
+
     <div class="card" id="editSection" style="display:none;">
 
-        <h3>Edit User</h3>
+        <div class="card-header">
+
+            <div>
+                <h3>Edit User Account</h3>
+
+                <p class="card-description">
+                    Update the selected user's account information.
+                </p>
+            </div>
+
+            <span class="section-tag">ACCOUNT SETTINGS</span>
+
+        </div>
 
         <form method="POST" autocomplete="off">
 
@@ -758,15 +1681,18 @@ th {
             <div class="form-grid">
 
                 <div class="form-group">
+
                     <label>Full Name</label>
 
                     <input type="text"
                            name="full_name"
                            id="edit_full_name"
                            required>
+
                 </div>
 
                 <div class="form-group">
+
                     <label>Username</label>
 
                     <input type="text"
@@ -774,9 +1700,11 @@ th {
                            id="edit_username"
                            autocomplete="off"
                            required>
+
                 </div>
 
                 <div class="form-group">
+
                     <label>New Password</label>
 
                     <input type="password"
@@ -784,34 +1712,51 @@ th {
                            minlength="8"
                            autocomplete="new-password"
                            placeholder="Leave blank to keep current password">
+
+                    <div class="form-hint">
+                        Leave empty if you do not want to change the password.
+                    </div>
+
                 </div>
 
                 <div class="form-group">
-                    <label>Role</label>
+
+                    <label>Account Role</label>
 
                     <select name="role" id="edit_role" required>
                         <option value="staff">Staff</option>
                         <option value="admin">Admin</option>
                     </select>
+
                 </div>
 
             </div>
 
-            <button type="submit" class="edit-btn">
-                Save Changes
-            </button>
+            <div class="edit-actions">
 
-            <button type="button"
-                    style="background:#6c757d;"
-                    onclick="closeEdit()">
-                Cancel
-            </button>
+                <button type="submit" class="edit-btn">
+                    Save Changes
+                </button>
+
+                <button type="button"
+                        class="cancel-btn"
+                        onclick="closeEdit()">
+                    Cancel
+                </button>
+
+            </div>
 
         </form>
 
     </div>
 
-</div>
+
+    <!-- FOOTER -->
+    <div class="page-footer">
+        Bakery System &copy; <?= date('Y') ?> | User Management
+    </div>
+
+</main>
 
 
 <script>
@@ -832,8 +1777,10 @@ function editUser(user) {
     section.style.display = 'block';
 
     section.scrollIntoView({
-        behavior: 'smooth'
+        behavior: 'smooth',
+        block: 'start'
     });
+
 }
 
 // Close edit form
