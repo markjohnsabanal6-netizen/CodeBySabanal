@@ -5,17 +5,14 @@ date_default_timezone_set('America/Los_Angeles');
 session_start();
 require_once '../config/database.php';
 
-// Synchronize MySQL timezone with PHP.
+// SYNCHRONIZE DATABASE TIMEZONE
 $pacificOffset = (
-    new DateTime(
-        'now',
-        new DateTimeZone('America/Los_Angeles')
-    )
+    new DateTime('now', new DateTimeZone('America/Los_Angeles'))
 )->format('P');
 
 $conn->exec("SET time_zone = " . $conn->quote($pacificOffset));
 
-// Protect page.
+// CHECK LOGIN
 if (!isset($_SESSION['user_id'])) {
     header("Location: ../login.php");
     exit;
@@ -23,246 +20,416 @@ if (!isset($_SESSION['user_id'])) {
 
 // USER INFORMATION
 $rawName = $_SESSION['full_name'] ?? 'User';
-$userName = htmlspecialchars($rawName, ENT_QUOTES, 'UTF-8');
-$userRole = $_SESSION['role'] ?? 'staff';
-$isAdmin = ($userRole === 'admin');
+$name = htmlspecialchars($rawName, ENT_QUOTES, 'UTF-8');
 $initial = strtoupper(substr($rawName, 0, 1));
 
-$displayRole = $isAdmin ? 'ADMINISTRATOR' : 'STAFF';
+$role = $_SESSION['role'] ?? 'staff';
+$isAdmin = ($role === 'admin');
+$userId = (int)$_SESSION['user_id'];
 
-// Initialize missing inventory records.
-try {
-    $conn->exec("
-        INSERT INTO inventory (product_id, quantity, minimum_stock)
-        SELECT p.product_id, 0, 5
-        FROM products p
-        LEFT JOIN inventory i ON p.product_id = i.product_id
-        WHERE i.product_id IS NULL
-    ");
-} catch (PDOException $e) {
-    error_log($e->getMessage());
-    die("Unable to initialize inventory.");
+$todayLabel = date('l, F d, Y');
+
+$message = '';
+$messageType = 'success';
+
+// HTML ESCAPE
+function e($value)
+{
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
 }
 
-// HANDLE STOCK ACTIONS
+// CATEGORY ICON
+function getCategoryIcon($categoryName)
+{
+    $name = strtolower((string)$categoryName);
+
+    if (strpos($name, 'bread') !== false) {
+        return '🍞';
+    }
+
+    if (strpos($name, 'cake') !== false) {
+        return '🎂';
+    }
+
+    if (strpos($name, 'cookie') !== false) {
+        return '🍪';
+    }
+
+    if (strpos($name, 'pastry') !== false) {
+        return '🥐';
+    }
+
+    if (strpos($name, 'drink') !== false) {
+        return '🥤';
+    }
+
+    if (strpos($name, 'donut') !== false) {
+        return '🍩';
+    }
+
+    if (strpos($name, 'muffin') !== false) {
+        return '🧁';
+    }
+
+    if (strpos($name, 'ensaymada') !== false) {
+        return '🥯';
+    }
+
+    return '🧁';
+}
+
+// GET NOTIFICATIONS
+if (isset($_GET['stock_in'])) {
+    $message = "Stock added successfully!";
+} elseif (isset($_GET['stock_out'])) {
+    $message = "Stock deducted successfully!";
+} elseif (isset($_GET['minimum_updated'])) {
+    $message = "Minimum stock updated successfully!";
+} elseif (isset($_GET['error'])) {
+    $message = trim($_GET['error']);
+    $messageType = 'error';
+}
+
+// INITIALIZE INVENTORY FOR ACTIVE PRODUCTS
+try {
+    $initializeInventory = $conn->prepare("
+        INSERT IGNORE INTO inventory
+            (product_id, quantity, minimum_stock)
+        SELECT
+            product_id,
+            0,
+            5
+        FROM products
+        WHERE is_archived = 0
+    ");
+
+    $initializeInventory->execute();
+
+} catch (PDOException $e) {
+    $message = "Unable to initialize inventory records.";
+    $messageType = 'error';
+}
+
+// STOCK IN / STOCK OUT / SET MINIMUM
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $action = $_POST['action'] ?? '';
-    $product_id = filter_input(INPUT_POST, 'product_id', FILTER_VALIDATE_INT);
 
-    try {
+    // STOCK IN AND STOCK OUT
+    if ($action === 'stock_in' || $action === 'stock_out') {
 
-        if (!$product_id || $product_id < 1) {
-            throw new Exception("Invalid product selected.");
-        }
+        $productId = (int)($_POST['product_id'] ?? 0);
+        $quantity = filter_var(
+            $_POST['quantity'] ?? null,
+            FILTER_VALIDATE_INT
+        );
 
-        if ($action === 'stock_in' || $action === 'stock_out') {
+        $remarksChoice = trim($_POST['remarks_choice'] ?? '');
+        $customRemarks = trim($_POST['custom_remarks'] ?? '');
 
-            $amount = filter_input(INPUT_POST, 'quantity', FILTER_VALIDATE_INT);
+        $remarks = $remarksChoice === 'Custom Remark'
+            ? $customRemarks
+            : $remarksChoice;
 
-            if (!$amount || $amount < 1) {
+        try {
+
+            if ($productId <= 0) {
+                throw new Exception("Invalid product selected.");
+            }
+
+            if ($quantity === false || $quantity <= 0) {
                 throw new Exception("Please enter a valid quantity.");
             }
 
-            $remark_choice = trim($_POST['remarks_choice'] ?? '');
-            $custom_remarks = trim($_POST['custom_remarks'] ?? '');
-
-            $allowed_remarks = [
-                'stock_in' => [
-                    'New Production',
-                    'Supplier Delivery',
-                    'Restocking',
-                    'Customer Return',
-                    'Stock Adjustment'
-                ],
-                'stock_out' => [
-                    'Sold Products',
-                    'Damaged Products',
-                    'Expired Products',
-                    'Production Use',
-                    'Returned to Supplier',
-                    'Stock Adjustment'
-                ]
-            ];
-
-            if ($remark_choice === 'Custom Remark') {
-
-                if ($custom_remarks === '') {
-                    throw new Exception("Please enter your custom remark.");
-                }
-
-                $remarks = $custom_remarks;
-
-            } else {
-
-                if (!in_array($remark_choice, $allowed_remarks[$action], true)) {
-                    throw new Exception("Please select a valid remark.");
-                }
-
-                $remarks = $remark_choice;
+            if ($remarks === '') {
+                throw new Exception("Please select or enter remarks.");
             }
 
             $conn->beginTransaction();
 
-            $stmt = $conn->prepare("
+            // CHECK PRODUCT AND LOCK INVENTORY RECORD
+            $checkProduct = $conn->prepare("
+                SELECT
+                    p.product_id,
+                    p.product_name,
+                    p.is_archived
+                FROM products p
+                WHERE p.product_id = ?
+                FOR UPDATE
+            ");
+
+            $checkProduct->execute([$productId]);
+            $product = $checkProduct->fetch(PDO::FETCH_ASSOC);
+
+            if (!$product || (int)$product['is_archived'] === 1) {
+                throw new Exception("Product not found or archived.");
+            }
+
+            // LOCK CURRENT INVENTORY
+            $inventoryStmt = $conn->prepare("
                 SELECT quantity
                 FROM inventory
                 WHERE product_id = ?
                 FOR UPDATE
             ");
 
-            $stmt->execute([$product_id]);
-            $inventory = $stmt->fetch(PDO::FETCH_ASSOC);
+            $inventoryStmt->execute([$productId]);
+            $inventory = $inventoryStmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$inventory) {
                 throw new Exception("Inventory record not found.");
             }
 
-            $current_quantity = (int)$inventory['quantity'];
+            $currentQuantity = (int)$inventory['quantity'];
 
-            if ($action === 'stock_out' && $amount > $current_quantity) {
+            if ($action === 'stock_out' && $quantity > $currentQuantity) {
                 throw new Exception(
-                    "Not enough stock available. Current stock: " . $current_quantity
+                    "Insufficient stock. Current stock is " .
+                    $currentQuantity . "."
                 );
             }
 
+            // COMPUTE NEW STOCK
             if ($action === 'stock_in') {
-                $new_quantity = $current_quantity + $amount;
-                $movement_type = 'stock_in';
+                $newQuantity = $currentQuantity + $quantity;
+                $movementType = 'IN';
             } else {
-                $new_quantity = $current_quantity - $amount;
-                $movement_type = 'stock_out';
+                $newQuantity = $currentQuantity - $quantity;
+                $movementType = 'OUT';
             }
 
-            $update = $conn->prepare("
+            // UPDATE INVENTORY QUANTITY
+            $updateInventory = $conn->prepare("
                 UPDATE inventory
                 SET quantity = ?,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = NOW()
                 WHERE product_id = ?
             ");
 
-            $update->execute([$new_quantity, $product_id]);
+            $updateInventory->execute([
+                $newQuantity,
+                $productId
+            ]);
 
-            $movement = $conn->prepare("
+            // RECORD STOCK MOVEMENT
+            $movementStmt = $conn->prepare("
                 INSERT INTO stock_movements
-                    (product_id, user_id, movement_type, quantity, remarks)
-                VALUES (?, ?, ?, ?, ?)
+                    (
+                        product_id,
+                        user_id,
+                        movement_type,
+                        quantity,
+                        remarks,
+                        movement_date
+                    )
+                VALUES (?, ?, ?, ?, ?, NOW())
             ");
 
-            $movement->execute([
-                $product_id,
-                $_SESSION['user_id'],
-                $movement_type,
-                $amount,
+            $movementStmt->execute([
+                $productId,
+                $userId,
+                $movementType,
+                $quantity,
                 $remarks
             ]);
 
             $conn->commit();
 
-            $status = $action === 'stock_in'
-                ? 'stock_in_success'
-                : 'stock_out_success';
-
-            header("Location: inventory.php?status=" . $status);
-            exit;
-        }
-
-        if ($action === 'set_minimum') {
-
-            $minimum_stock = filter_input(
-                INPUT_POST,
-                'minimum_stock',
-                FILTER_VALIDATE_INT
-            );
-
-            if (
-                $minimum_stock === false ||
-                $minimum_stock === null ||
-                $minimum_stock < 0
-            ) {
-                throw new Exception("Please enter a valid minimum stock level.");
+            if ($action === 'stock_in') {
+                header("Location: inventory.php?stock_in=1");
+            } else {
+                header("Location: inventory.php?stock_out=1");
             }
 
-            $stmt = $conn->prepare("
+            exit;
+
+        } catch (Exception $e) {
+
+            if ($conn->inTransaction()) {
+                $conn->rollBack();
+            }
+
+            header(
+                "Location: inventory.php?error=" .
+                urlencode($e->getMessage())
+            );
+
+            exit;
+        }
+    }
+
+    // SET MINIMUM STOCK
+    if ($action === 'set_minimum') {
+
+        $productId = (int)($_POST['product_id'] ?? 0);
+
+        $minimumStock = filter_var(
+            $_POST['minimum_stock'] ?? null,
+            FILTER_VALIDATE_INT
+        );
+
+        try {
+
+            if ($productId <= 0) {
+                throw new Exception("Invalid product selected.");
+            }
+
+            if ($minimumStock === false || $minimumStock < 0) {
+                throw new Exception("Please enter a valid minimum stock.");
+            }
+
+            $checkProduct = $conn->prepare("
+                SELECT product_id
+                FROM products
+                WHERE product_id = ?
+                  AND is_archived = 0
+            ");
+
+            $checkProduct->execute([$productId]);
+
+            if (!$checkProduct->fetchColumn()) {
+                throw new Exception("Product not found or archived.");
+            }
+
+            // ONLY UPDATE MINIMUM STOCK.
+            // CURRENT QUANTITY WILL NOT BE CHANGED.
+            $updateMinimum = $conn->prepare("
                 UPDATE inventory
-                SET minimum_stock = ?
+                SET minimum_stock = ?,
+                    updated_at = NOW()
                 WHERE product_id = ?
             ");
 
-            $stmt->execute([$minimum_stock, $product_id]);
+            $updateMinimum->execute([
+                $minimumStock,
+                $productId
+            ]);
 
-            header("Location: inventory.php?status=minimum_updated");
+            header("Location: inventory.php?minimum_updated=1");
+            exit;
+
+        } catch (Exception $e) {
+
+            header(
+                "Location: inventory.php?error=" .
+                urlencode($e->getMessage())
+            );
+
             exit;
         }
-
-        throw new Exception("Invalid action.");
-
-    } catch (PDOException $e) {
-
-        if ($conn->inTransaction()) {
-            $conn->rollBack();
-        }
-
-        error_log($e->getMessage());
-
-        header("Location: inventory.php?error=" . urlencode(
-            "A database error occurred. Please try again."
-        ));
-        exit;
-
-    } catch (Throwable $e) {
-
-        if ($conn->inTransaction()) {
-            $conn->rollBack();
-        }
-
-        header("Location: inventory.php?error=" . urlencode($e->getMessage()));
-        exit;
     }
 }
 
+// CATEGORY FILTER
+$selectedCategory = (int)($_GET['category'] ?? 0);
+
+// GET CATEGORIES AND PRODUCT COUNTS
+$categoryCountStmt = $conn->query("
+    SELECT
+        c.category_id,
+        c.category_name,
+        COUNT(p.product_id) AS product_count
+    FROM categories c
+    LEFT JOIN products p
+        ON c.category_id = p.category_id
+        AND p.is_archived = 0
+    GROUP BY
+        c.category_id,
+        c.category_name
+    ORDER BY c.category_name ASC
+");
+
+$categoryCounts = $categoryCountStmt->fetchAll(PDO::FETCH_ASSOC);
+
+// TOTAL ACTIVE PRODUCTS
+$totalRegisteredProducts = (int)$conn->query("
+    SELECT COUNT(*)
+    FROM products
+    WHERE is_archived = 0
+")->fetchColumn();
+
 // GET INVENTORY PRODUCTS
-$stmt = $conn->query("
+$inventorySql = "
     SELECT
         p.product_id,
         p.product_name,
-        p.category_id,
+        p.product_image,
+        p.price,
+        p.is_archived,
+        c.category_id,
         c.category_name,
         i.quantity,
-        i.minimum_stock,
-        i.updated_at
+        i.minimum_stock
     FROM products p
-    LEFT JOIN categories c ON p.category_id = c.category_id
-    INNER JOIN inventory i ON p.product_id = i.product_id
-    ORDER BY p.product_name ASC
-");
+    INNER JOIN inventory i
+        ON p.product_id = i.product_id
+    LEFT JOIN categories c
+        ON p.category_id = c.category_id
+    WHERE p.is_archived = 0
+";
 
-$products = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$inventoryParams = [];
 
-// GET CATEGORIES
-$categoryStmt = $conn->query("
-    SELECT category_id, category_name
-    FROM categories
-    ORDER BY category_name ASC
-");
-
-$categories = $categoryStmt->fetchAll(PDO::FETCH_ASSOC);
-
-// COUNT PRODUCTS PER CATEGORY
-$category_counts = [];
-
-foreach ($products as $product) {
-
-    $category_id = $product['category_id'] === null
-        ? 'uncategorized'
-        : (string)$product['category_id'];
-
-    $category_counts[$category_id] =
-        ($category_counts[$category_id] ?? 0) + 1;
+if ($selectedCategory > 0) {
+    $inventorySql .= " AND p.category_id = :category";
+    $inventoryParams['category'] = $selectedCategory;
 }
 
-// GET RECENT STOCK MOVEMENTS
-$stmt = $conn->query("
+$inventorySql .= " ORDER BY p.product_name ASC";
+
+$inventoryStmt = $conn->prepare($inventorySql);
+$inventoryStmt->execute($inventoryParams);
+
+$inventoryProducts = $inventoryStmt->fetchAll(PDO::FETCH_ASSOC);
+
+// INVENTORY STATISTICS
+$statsStmt = $conn->query("
+    SELECT
+        COUNT(*) AS total_products,
+        COALESCE(SUM(i.quantity), 0) AS total_stock,
+
+        SUM(
+            CASE
+                WHEN i.quantity > 0
+                 AND i.quantity <= i.minimum_stock
+                THEN 1 ELSE 0
+            END
+        ) AS low_stock,
+
+        SUM(
+            CASE
+                WHEN i.quantity <= 0
+                THEN 1 ELSE 0
+            END
+        ) AS out_of_stock,
+
+        SUM(
+            CASE
+                WHEN i.quantity > 0
+                THEN 1 ELSE 0
+            END
+        ) AS available_products
+
+    FROM products p
+    INNER JOIN inventory i
+        ON p.product_id = i.product_id
+    WHERE p.is_archived = 0
+");
+
+$stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
+
+$totalProducts = (int)($stats['total_products'] ?? 0);
+$totalStock = (int)($stats['total_stock'] ?? 0);
+$lowStock = (int)($stats['low_stock'] ?? 0);
+$outOfStock = (int)($stats['out_of_stock'] ?? 0);
+$availableProducts = (int)($stats['available_products'] ?? 0);
+
+$availabilityPercentage = $totalProducts > 0
+    ? round(($availableProducts / $totalProducts) * 100)
+    : 0;
+
+// RECENT STOCK MOVEMENTS
+$movementStmt = $conn->query("
     SELECT
         sm.movement_type,
         sm.quantity,
@@ -271,144 +438,37 @@ $stmt = $conn->query("
         p.product_name,
         u.full_name
     FROM stock_movements sm
-    INNER JOIN products p ON sm.product_id = p.product_id
-    INNER JOIN users u ON sm.user_id = u.user_id
+    LEFT JOIN products p
+        ON sm.product_id = p.product_id
+    LEFT JOIN users u
+        ON sm.user_id = u.user_id
     ORDER BY sm.movement_date DESC
     LIMIT 20
 ");
 
-$movements = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$recentMovements = $movementStmt->fetchAll(PDO::FETCH_ASSOC);
 
-// INVENTORY SUMMARY
-$total_products = count($products);
-$total_stock = 0;
-$low_stock_count = 0;
-$out_of_stock_count = 0;
+// CATEGORY FILTER DISPLAY NAME
+$selectedCategoryName = 'All Products';
 
-foreach ($products as $product) {
-
-    $quantity = (int)$product['quantity'];
-    $minimum = (int)$product['minimum_stock'];
-
-    $total_stock += $quantity;
-
-    if ($quantity <= $minimum) {
-        $low_stock_count++;
-    }
-
-    if ($quantity === 0) {
-        $out_of_stock_count++;
+if ($selectedCategory > 0) {
+    foreach ($categoryCounts as $category) {
+        if ((int)$category['category_id'] === $selectedCategory) {
+            $selectedCategoryName = $category['category_name'];
+            break;
+        }
     }
 }
 
-// INVENTORY AVAILABILITY PERCENTAGE
-$available_percentage = $total_products > 0
-    ? (($total_products - $out_of_stock_count) / $total_products) * 100
-    : 0;
+// CATEGORY URL
+function categoryUrl($categoryId)
+{
+    if ((int)$categoryId === 0) {
+        return 'inventory.php';
+    }
 
-// SECURE OUTPUT
-function e($value) {
-    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+    return 'inventory.php?category=' . (int)$categoryId;
 }
-
-/*
-|--------------------------------------------------------------------------
-| AUTOMATIC PRODUCT IMAGE MATCHING
-|--------------------------------------------------------------------------
-| Images are selected using the product name and category.
-| This works for existing products and newly added products.
-| No database image column is required.
-*/
-
-function getProductImage($productName, $categoryName = '') {
-
-    $name = strtolower(trim($productName));
-    $category = strtolower(trim($categoryName));
-
-    // Cake products
-    if (
-        strpos($name, 'cake') !== false ||
-        strpos($name, 'cheesecake') !== false ||
-        strpos($name, 'cupcake') !== false ||
-        strpos($name, 'tiramisu') !== false ||
-        strpos($name, 'black forest') !== false ||
-        strpos($name, 'red velvet') !== false ||
-        strpos($category, 'cake') !== false
-    ) {
-        return 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?w=300&h=220&fit=crop';
-    }
-
-    // Bread products
-    if (
-        strpos($name, 'bread') !== false ||
-        strpos($name, 'loaf') !== false ||
-        strpos($name, 'pandesal') !== false ||
-        strpos($name, 'baguette') !== false ||
-        strpos($name, 'toast') !== false ||
-        strpos($name, 'bun') !== false ||
-        strpos($category, 'bread') !== false
-    ) {
-        return 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=300&h=220&fit=crop';
-    }
-
-    // Croissant products
-    if (
-        strpos($name, 'croissant') !== false ||
-        strpos($name, 'danish') !== false ||
-        strpos($name, 'puff') !== false
-    ) {
-        return 'https://images.unsplash.com/photo-1555507036-ab1f4038808a?w=300&h=220&fit=crop';
-    }
-
-    // Cookie and biscuit products
-    if (
-        strpos($name, 'cookie') !== false ||
-        strpos($name, 'cookies') !== false ||
-        strpos($name, 'biscuit') !== false ||
-        strpos($name, 'cracker') !== false ||
-        strpos($category, 'cookie') !== false
-    ) {
-        return 'https://images.unsplash.com/photo-1499636136210-6f4ee915583e?w=300&h=220&fit=crop';
-    }
-
-    // Donut products
-    if (
-        strpos($name, 'donut') !== false ||
-        strpos($name, 'doughnut') !== false
-    ) {
-        return 'https://images.unsplash.com/photo-1551024506-0?auto=format&fit=crop&w=300&h=220';
-    }
-
-    // Muffin products
-    if (
-        strpos($name, 'muffin') !== false
-    ) {
-        return 'https://images.unsplash.com/photo-1607958996333-41aef7caefaa?w=300&h=220&fit=crop';
-    }
-
-    // Pastry products
-    if (
-        strpos($name, 'pastry') !== false ||
-        strpos($name, 'tart') !== false ||
-        strpos($name, 'pie') !== false ||
-        strpos($name, 'eclair') !== false ||
-        strpos($category, 'pastry') !== false
-    ) {
-        return 'https://images.unsplash.com/photo-1509365465985-25d11c17e812?w=300&h=220&fit=crop';
-    }
-
-    // Default bakery image
-    return 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=300&h=220&fit=crop';
-}
-
-$messages = [
-    'stock_in_success' => 'Stock successfully added!',
-    'stock_out_success' => 'Stock successfully deducted!',
-    'minimum_updated' => 'Minimum stock level updated!'
-];
-
-$status = $_GET['status'] ?? '';
-$todayLabel = date('l, F d, Y');
 
 ?>
 
@@ -420,7 +480,7 @@ $todayLabel = date('l, F d, Y');
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<title>Inventory Management | Bakery Management System</title>
+<title>Inventory | Bakery Management System</title>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -434,21 +494,20 @@ $todayLabel = date('l, F d, Y');
     --brown-deep: #422918;
     --brown: #805735;
     --brown-light: #a77b55;
-
     --cream: #f7f4ef;
     --text: #34271f;
     --muted: #88796e;
     --border: #eee5dc;
     --white: #ffffff;
-
-    --green: #27834c;
-    --red: #c64b43;
-
     --sidebar-width: 260px;
 }
 
 * {
     box-sizing: border-box;
+}
+
+html {
+    scroll-behavior: smooth;
 }
 
 body {
@@ -467,13 +526,10 @@ body {
     left: 0;
     bottom: 0;
     z-index: 1000;
-
     display: flex;
     flex-direction: column;
-
     width: var(--sidebar-width);
     padding: 28px 25px 20px;
-
     color: white;
     background: var(--brown-dark);
     overflow-y: auto;
@@ -528,13 +584,10 @@ body {
     gap: 17px;
     min-height: 57px;
     padding: 12px 17px;
-
     color: #fff;
     text-decoration: none;
-
     border-radius: 14px;
     border-left: 4px solid transparent;
-
     font-size: 15px;
     font-weight: 600;
     transition: .2s ease;
@@ -555,6 +608,7 @@ body {
     justify-content: center;
     align-items: center;
     width: 22px;
+    min-width: 22px;
     font-size: 19px;
 }
 
@@ -570,22 +624,19 @@ body {
     gap: 16px;
     min-height: 57px;
     padding: 12px 18px;
-
     color: #fff;
     background: #a13f30;
     border-radius: 13px;
     text-decoration: none;
-
     font-size: 15px;
     font-weight: 700;
-    transition: .2s ease;
 }
 
 .logout-link:hover {
     background: #8e3428;
 }
 
-/* MAIN CONTENT */
+/* MAIN */
 
 .main {
     min-height: 100vh;
@@ -598,8 +649,6 @@ body {
     max-width: 1500px;
     margin: 0 auto;
 }
-
-/* TOPBAR */
 
 .topbar {
     display: flex;
@@ -640,7 +689,6 @@ body {
     color: var(--brown);
     font-size: 17px;
     font-weight: 800;
-    flex-shrink: 0;
 }
 
 .user-details strong {
@@ -673,8 +721,6 @@ body {
     gap: 15px;
     padding: 27px 30px;
     margin-bottom: 25px;
-    overflow: hidden;
-
     color: white;
     background: linear-gradient(115deg, #59391f, #805633);
     border-radius: 15px;
@@ -682,42 +728,21 @@ body {
 
 .welcome-banner h2 {
     margin: 0 0 7px;
+    color: #fff;
     font-family: 'Playfair Display', serif;
     font-size: 23px;
 }
 
 .welcome-banner p {
+    margin: 0;
     color: #e6d7c8;
     font-size: 12px;
     line-height: 1.7;
-    margin: 5px 0;
 }
 
 .banner-icon {
     font-size: 55px;
     opacity: .9;
-}
-
-/* NOTIFICATIONS */
-
-.message {
-    padding: 13px 16px;
-    margin-bottom: 18px;
-    border-radius: 9px;
-    font-size: 12px;
-    font-weight: 700;
-}
-
-.success {
-    color: #216b3b;
-    background: #eaf7ee;
-    border: 1px solid #d3edda;
-}
-
-.error {
-    color: #a52f2f;
-    background: #fff0ef;
-    border: 1px solid #f4d5d2;
 }
 
 /* SECTION HEADINGS */
@@ -741,37 +766,43 @@ body {
     font-size: 11px;
 }
 
-/* STAT CARDS */
+/* OVERVIEW CARDS */
 
-.stats-grid {
+.overview-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 16px;
 }
 
-.stat-card {
+.overview-card {
     min-width: 0;
     padding: 20px;
     background: white;
     border: 1px solid var(--border);
     border-radius: 13px;
     box-shadow: 0 3px 12px rgba(55,35,18,.035);
+    transition: .2s ease;
 }
 
-.stat-top {
+.overview-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(55,35,18,.08);
+}
+
+.overview-card-top {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
 }
 
-.stat-label {
+.overview-card-label {
     color: var(--muted);
     font-size: 11px;
     font-weight: 600;
 }
 
-.stat-icon {
+.overview-icon {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -779,7 +810,6 @@ body {
     height: 36px;
     border-radius: 10px;
     font-size: 17px;
-    flex-shrink: 0;
 }
 
 .icon-brown {
@@ -798,15 +828,14 @@ body {
     background: #fce8e6;
 }
 
-.stat-value {
+.overview-number {
     margin-top: 15px;
     color: var(--brown);
     font-size: 25px;
     font-weight: 800;
-    overflow-wrap: anywhere;
 }
 
-.stat-note {
+.overview-description {
     margin-top: 5px;
     color: var(--muted);
     font-size: 10px;
@@ -817,7 +846,7 @@ body {
 .panel {
     min-width: 0;
     padding: 21px;
-    margin-top: 20px;
+    margin-bottom: 20px;
     background: white;
     border: 1px solid var(--border);
     border-radius: 13px;
@@ -837,124 +866,356 @@ body {
     font-size: 14px;
 }
 
-.panel-header span {
+.panel-header p {
+    margin: 5px 0 0;
     color: var(--muted);
     font-size: 10px;
 }
 
-.panel-description {
-    margin: 6px 0 0;
-    color: var(--muted);
+.panel-header-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: #f2e7db;
+    font-size: 17px;
+}
+
+/* NOTIFICATIONS */
+
+.message {
+    padding: 11px 14px;
+    margin-bottom: 16px;
+    border-radius: 8px;
     font-size: 11px;
-    line-height: 1.6;
+    transition: opacity .5s ease;
 }
 
-.panel-tag {
-    padding: 6px 10px;
+.success-message {
+    background: #e3f2e8;
+    color: #34734a;
+    border: 1px solid #b9e2c1;
+}
+
+.error-message {
+    background: #fce8e6;
+    color: #a12626;
+    border: 1px solid #f2baba;
+}
+
+/* INVENTORY STATUS */
+
+.status-panel {
+    padding: 21px;
+    margin-bottom: 20px;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 13px;
+}
+
+.status-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 13px;
+}
+
+.status-top h3 {
+    margin: 0;
     color: var(--brown);
-    background: #eee3d5;
+    font-size: 14px;
+}
+
+.status-percentage {
+    color: var(--brown);
+    font-size: 20px;
+    font-weight: 800;
+}
+
+.progress-track {
+    width: 100%;
+    height: 11px;
+    overflow: hidden;
+    background: #eee7df;
     border-radius: 20px;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #805735, #b68b63);
+    border-radius: 20px;
+    transition: width .3s ease;
+}
+
+.status-description {
+    margin: 10px 0 0;
+    color: var(--muted);
     font-size: 10px;
+}
+
+/* CATEGORY CARDS - MATCH PRODUCTS PAGE */
+
+.category-section {
+    margin-bottom: 22px;
+    scroll-margin-top: 20px;
+}
+
+.category-title {
+    margin: 0 0 17px;
+    color: var(--brown-light);
+    font-size: 15px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
+.category-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.category-card {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    min-width: 0;
+    min-height: 87px;
+    padding: 15px 18px;
+    color: var(--brown-dark);
+    background: #fffdfa;
+    border: 1px solid #eee1d5;
+    border-radius: 17px;
+    text-decoration: none;
+    transition: .2s ease;
+}
+
+.category-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--brown-light);
+    box-shadow: 0 5px 14px rgba(84,53,31,.08);
+}
+
+.category-card.active {
+    color: white;
+    background: linear-gradient(120deg, #805735, #54351f);
+    border-color: var(--brown-dark);
+    box-shadow: 0 6px 15px rgba(84,53,31,.15);
+}
+
+.category-card-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 54px;
+    height: 54px;
+    flex-shrink: 0;
+    border-radius: 15px;
+    background: #f1e5d9;
+    font-size: 27px;
+}
+
+.category-card.active .category-card-icon {
+    background: rgba(255,255,255,.17);
+}
+
+.category-card-info {
+    min-width: 0;
+}
+
+.category-card-name {
+    display: block;
+    overflow: hidden;
+    color: inherit;
+    font-size: 14px;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.category-card-count {
+    display: block;
+    margin-top: 5px;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.category-card.active .category-card-count {
+    color: #ead9c8;
+}
+
+.category-showing {
+    margin-top: 17px;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+/* BUTTONS */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 9px 13px;
+    border: none;
+    border-radius: 7px;
+    text-decoration: none;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    transition: .2s;
+}
+
+.primary-btn {
+    background: var(--brown-dark);
+    color: white;
+}
+
+.primary-btn:hover {
+    background: var(--brown-light);
+    transform: translateY(-1px);
+}
+
+.cancel-btn {
+    background: #eee8e0;
+    color: var(--brown);
+}
+
+.cancel-btn:hover {
+    background: #e4d9cc;
+}
+
+.stock-in-btn {
+    background: #e3f2e8;
+    color: #34734a;
+}
+
+.stock-in-btn:hover {
+    background: #cce8d4;
+}
+
+.stock-out-btn {
+    background: #fce8e6;
+    color: #b83232;
+}
+
+.stock-out-btn:hover {
+    background: #f8d6d3;
+}
+
+.minimum-btn {
+    background: #e6eff8;
+    color: #2878b5;
+}
+
+.minimum-btn:hover {
+    background: #d5e5f5;
+}
+
+/* STOCK FORMS */
+
+.stock-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 190px;
+}
+
+.stock-form {
+    display: grid;
+    grid-template-columns: 75px 1fr;
+    gap: 5px;
+    align-items: center;
+}
+
+.stock-form input,
+.stock-form select {
+    width: 100%;
+    min-width: 0;
+    padding: 7px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    outline: none;
+    background: #fff;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 10px;
+}
+
+.stock-form input:focus,
+.stock-form select:focus {
+    border-color: var(--brown-light);
+    box-shadow: 0 0 0 3px rgba(130,85,47,.09);
+}
+
+.stock-form .btn {
+    grid-column: 1 / -1;
+    width: 100%;
+    padding: 7px;
+}
+
+.custom-remark {
+    display: none;
+    grid-column: 1 / -1;
+}
+
+.custom-remark.show {
+    display: block;
+}
+
+.minimum-form {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 125px;
+}
+
+.minimum-form input {
+    width: 65px;
+    padding: 7px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    outline: none;
+    font-family: inherit;
+    font-size: 10px;
+}
+
+.minimum-form .btn {
+    padding: 7px 8px;
+}
+
+/* STATUS BADGES */
+
+.status-badge {
+    display: inline-block;
+    padding: 5px 9px;
+    border-radius: 20px;
+    font-size: 9px;
     font-weight: 700;
     white-space: nowrap;
 }
 
-/* CATEGORY FILTER */
-
-.category-filter {
-    margin-bottom: 20px;
+.status-in {
+    background: #e3f2e8;
+    color: #34734a;
 }
 
-.category-filter-title {
-    margin: 0 0 12px;
-    color: var(--muted);
-    font-size: 11px;
-    font-weight: 700;
+.status-low {
+    background: #fff0db;
+    color: #a66a18;
 }
 
-.category-buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
+.status-out {
+    background: #fce8e6;
+    color: #b83232;
 }
 
-.category-button {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-
-    min-width: 145px;
-    padding: 10px 13px;
-
-    color: var(--brown-dark);
-    text-align: left;
-    background: #fffdf9;
-    border: 1px solid var(--border);
-    border-radius: 11px;
-
-    cursor: pointer;
-    transition: .2s ease;
-    font-family: inherit;
-}
-
-.category-button:hover {
-    border-color: #c9a98f;
-    transform: translateY(-2px);
-}
-
-.category-button.active {
-    color: white;
-    background: linear-gradient(135deg, #805735, #54351f);
-    border-color: var(--brown-dark);
-    box-shadow: 0 5px 13px rgba(75,46,29,.12);
-}
-
-.category-icon {
-    display: grid;
-    place-items: center;
-
-    width: 36px;
-    height: 36px;
-    flex: 0 0 36px;
-
-    background: #f1e5d9;
-    border-radius: 10px;
-    font-size: 18px;
-}
-
-.category-button.active .category-icon {
-    background: rgba(255,255,255,.16);
-}
-
-.category-button-text {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    min-width: 0;
-}
-
-.category-name {
-    font-size: 11px;
-    font-weight: 800;
-    overflow-wrap: anywhere;
-}
-
-.category-count {
-    color: #9a8879;
-    font-size: 10px;
-}
-
-.category-button.active .category-count {
-    color: #f0dfd1;
-}
-
-.filter-result {
-    margin: 12px 0 0;
-    color: var(--muted);
-    font-size: 10px;
-}
-
-/* TABLES */
+/* TABLE */
 
 .table-wrapper {
     width: 100%;
@@ -963,7 +1224,7 @@ body {
 
 table {
     width: 100%;
-    min-width: 1100px;
+    min-width: 1050px;
     border-collapse: collapse;
 }
 
@@ -980,191 +1241,114 @@ th {
     color: var(--muted);
     background: #faf8f5;
     font-weight: 700;
-    white-space: nowrap;
 }
 
 td {
     color: var(--text);
 }
 
-tbody tr:last-child td {
-    border-bottom: none;
+.product-cell {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    min-width: 180px;
 }
 
-tbody tr.inventory-row:hover {
-    background: #fffcf8;
+.product-thumbnail {
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+    object-fit: cover;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #faf8f5;
 }
 
-td:first-child {
-    color: var(--brown-deep);
+.no-product-image {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+    border-radius: 8px;
+    background: #f2e7db;
+    font-size: 22px;
+}
+
+.product-name {
+    color: var(--brown);
+    font-weight: 700;
+}
+
+.category-badge {
+    display: inline-block;
+    padding: 5px 9px;
+    border-radius: 20px;
+    background: #f2e7db;
+    color: var(--brown);
+    font-size: 9px;
+    font-weight: 700;
+}
+
+.stock-number {
+    color: var(--brown);
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.minimum-number {
+    color: var(--muted);
     font-weight: 700;
 }
 
 .empty {
-    padding: 22px 10px;
+    padding: 26px !important;
     color: var(--muted);
-    font-size: 12px;
     text-align: center;
 }
 
-/* PRODUCT IMAGE */
-
-.product-cell {
-    display: flex;
+.product-count {
+    display: inline-flex;
     align-items: center;
-    gap: 12px;
-    min-width: 210px;
-}
-
-.product-image {
-    width: 58px;
-    height: 58px;
-    flex: 0 0 58px;
-    object-fit: cover;
-    border-radius: 10px;
-    border: 1px solid var(--border);
-    background: #f5eee6;
-    box-shadow: 0 2px 6px rgba(55,35,18,.08);
-}
-
-.product-name {
-    color: var(--brown-deep);
-    font-size: 12px;
-    font-weight: 800;
-    line-height: 1.5;
-}
-
-/* STOCK STATUS */
-
-.low-stock,
-.normal-stock,
-.movement-badge {
-    display: inline-block;
-    padding: 5px 9px;
+    gap: 5px;
+    padding: 6px 10px;
     border-radius: 20px;
+    background: #f2e7db;
+    color: var(--brown);
     font-size: 9px;
     font-weight: 700;
     white-space: nowrap;
 }
 
-.low-stock,
-.movement-out {
-    color: #a83e32;
-    background: #fce8e6;
-}
+/* MOVEMENT LABELS */
 
-.normal-stock,
-.movement-in {
-    color: #34734a;
-    background: #e3f2e8;
-}
-
-/* STOCK ACTION FORMS */
-
-.action-form {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 7px;
-
-    width: 100%;
-    min-width: 0;
-
-    margin: 0 0 8px;
-    padding: 8px;
-
-    background: #fcfaf7;
-    border: 1px solid #f1e9e1;
-    border-radius: 9px;
-}
-
-.action-form:last-child {
-    margin-bottom: 0;
-}
-
-.action-form input,
-.action-form select {
-    min-height: 38px;
-    padding: 8px 10px;
-
-    color: var(--text);
-    background: white;
-
-    border: 1px solid #e6ddd4;
-    border-radius: 7px;
-
-    font-family: inherit;
-    font-size: 11px;
-    outline: none;
-}
-
-.action-form input:focus,
-.action-form select:focus {
-    border-color: #a77c5b;
-    box-shadow: 0 0 0 3px rgba(167,124,91,.12);
-}
-
-.action-form input[name="quantity"],
-.action-form input[name="minimum_stock"] {
-    flex: 0 0 115px;
-    width: 115px;
-    min-width: 100px;
-}
-
-.action-form select[name="remarks_choice"] {
-    flex: 1 1 150px;
-    width: 150px;
-    min-width: 125px;
-}
-
-.action-form input[name="custom_remarks"] {
-    flex: 1 1 150px;
-    width: 150px;
-    min-width: 125px;
-}
-
-.action-form button {
-    min-height: 38px;
-    padding: 8px 11px;
-
-    border: 0;
-    border-radius: 7px;
-
-    color: white;
-    font-family: inherit;
-    font-size: 10px;
+.movement-badge {
+    display: inline-block;
+    padding: 5px 9px;
+    border-radius: 20px;
+    font-size: 9px;
     font-weight: 800;
-    white-space: nowrap;
-
-    cursor: pointer;
-    transition: .2s ease;
 }
 
-.action-form button:hover {
-    filter: brightness(.93);
-    transform: translateY(-1px);
+.movement-in {
+    background: #e3f2e8;
+    color: #34734a;
 }
 
-.action-form button:disabled {
-    opacity: .5;
-    cursor: not-allowed;
-    transform: none;
+.movement-out {
+    background: #fce8e6;
+    color: #b83232;
 }
 
-.stock-in-btn {
-    background: #27834c;
+.quantity-in {
+    color: #34734a;
+    font-weight: 800;
 }
 
-.stock-out-btn {
-    background: #c64b43;
-}
-
-.minimum-btn {
-    background: var(--brown);
-}
-
-.custom-remark {
-    display: none;
+.quantity-out {
+    color: #b83232;
+    font-weight: 800;
 }
 
 /* FOOTER */
@@ -1179,6 +1363,16 @@ td:first-child {
 }
 
 /* RESPONSIVE */
+
+@media (max-width: 1200px) {
+    .overview-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .category-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
 
 @media (max-width: 1100px) {
 
@@ -1195,7 +1389,7 @@ td:first-child {
         padding: 24px;
     }
 
-    .stats-grid {
+    .category-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
@@ -1238,20 +1432,20 @@ td:first-child {
         padding: 20px 15px;
     }
 
-    .stats-grid {
+    .overview-grid {
         gap: 10px;
     }
 
-    .stat-card {
+    .overview-card {
         padding: 16px;
-    }
-
-    .stat-value {
-        font-size: 27px;
     }
 
     .panel {
         padding: 18px;
+    }
+
+    .category-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
 
@@ -1288,6 +1482,7 @@ td:first-child {
 
     .nav-icon {
         width: 17px;
+        min-width: 17px;
         font-size: 15px;
     }
 
@@ -1327,17 +1522,13 @@ td:first-child {
         font-size: 38px;
     }
 
-    .stats-grid {
+    .overview-grid {
         grid-template-columns: 1fr;
         gap: 10px;
     }
 
-    .stat-card {
+    .overview-card {
         padding: 17px;
-    }
-
-    .stat-value {
-        font-size: 28px;
     }
 
     .panel {
@@ -1349,49 +1540,25 @@ td:first-child {
         flex-direction: column;
     }
 
-    .panel-header {
-        align-items: flex-start;
+    .category-grid {
+        grid-template-columns: 1fr;
     }
 
-    .category-buttons {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 8px;
+    .category-card {
+        min-height: 75px;
     }
 
-    .category-button {
-        min-width: 0;
-        padding: 8px;
-        gap: 7px;
-    }
-
-    .category-icon {
-        width: 31px;
-        height: 31px;
-        flex-basis: 31px;
-        font-size: 16px;
-    }
-
-    .category-name {
-        font-size: 10px;
-    }
-
-    .category-count {
-        font-size: 9px;
+    .stock-actions {
+        min-width: 180px;
     }
 }
 
 @media (max-width: 360px) {
 
-    .nav-menu,
-    .category-buttons,
-    .stats-grid {
+    .nav-menu {
         grid-template-columns: 1fr;
     }
 
-    .welcome-banner h2 {
-        font-size: 18px;
-    }
 }
 
 </style>
@@ -1473,7 +1640,6 @@ td:first-child {
 
 </aside>
 
-
 <!-- MAIN CONTENT -->
 
 <main class="main">
@@ -1485,13 +1651,8 @@ td:first-child {
     <header class="topbar">
 
         <div class="page-title">
-
             <h1>Inventory Management</h1>
-
-            <p>
-                Manage your bakery stock and monitor product availability.
-            </p>
-
+            <p>Monitor and manage your bakery stock.</p>
         </div>
 
         <div class="user-info">
@@ -1502,11 +1663,11 @@ td:first-child {
 
             <div class="user-details">
 
-                <strong><?= $userName ?></strong>
+                <strong><?= $name ?></strong>
 
                 <span>
                     <span class="role-badge">
-                        <?= e($displayRole) ?>
+                        <?= $isAdmin ? 'ADMINISTRATOR' : 'STAFF' ?>
                     </span>
                 </span>
 
@@ -1515,7 +1676,6 @@ td:first-child {
         </div>
 
     </header>
-
 
     <!-- WELCOME BANNER -->
 
@@ -1526,8 +1686,7 @@ td:first-child {
             <h2>Inventory Overview 📦</h2>
 
             <p>
-                Monitor your bakery products, manage stock levels,
-                and keep track of every inventory movement.
+                Track your bakery products, monitor stock levels, and manage stock movements.
                 <br>
                 <?= e($todayLabel) ?>
             </p>
@@ -1538,25 +1697,18 @@ td:first-child {
 
     </section>
 
-
     <!-- NOTIFICATIONS -->
 
-    <?php if (isset($messages[$status])): ?>
+    <?php if ($message): ?>
 
-        <div class="message success">
-            ✓ <?= e($messages[$status]) ?>
+        <div
+            class="message <?= $messageType === 'success' ? 'success-message' : 'error-message' ?>"
+            id="inventoryMessage"
+        >
+            <?= e($message) ?>
         </div>
 
     <?php endif; ?>
-
-    <?php if (isset($_GET['error'])): ?>
-
-        <div class="message error">
-            ⚠ <?= e($_GET['error']) ?>
-        </div>
-
-    <?php endif; ?>
-
 
     <!-- INVENTORY OVERVIEW -->
 
@@ -1564,113 +1716,93 @@ td:first-child {
 
         <h2>Inventory Overview</h2>
 
-        <span>Current stock monitoring</span>
+        <span>Summary of your current stock</span>
 
     </div>
 
-    <section class="stats-grid">
+    <section class="overview-grid">
 
-        <div class="stat-card">
+        <div class="overview-card">
 
-            <div class="stat-top">
+            <div class="overview-card-top">
 
-                <span class="stat-label">
-                    Total Products
-                </span>
+                <span class="overview-card-label">Total Products</span>
 
-                <span class="stat-icon icon-brown">
-                    🧁
-                </span>
+                <span class="overview-icon icon-brown">🍞</span>
 
             </div>
 
-            <div class="stat-value">
-                <?= number_format($total_products) ?>
+            <div class="overview-number">
+                <?= number_format($totalProducts) ?>
             </div>
 
-            <div class="stat-note">
-                Registered bakery products
-            </div>
+            <p class="overview-description">
+                Registered active products
+            </p>
 
         </div>
 
+        <div class="overview-card">
 
-        <div class="stat-card">
+            <div class="overview-card-top">
 
-            <div class="stat-top">
+                <span class="overview-card-label">Available Stock</span>
 
-                <span class="stat-label">
-                    Available Stock
-                </span>
-
-                <span class="stat-icon icon-green">
-                    📦
-                </span>
+                <span class="overview-icon icon-green">📦</span>
 
             </div>
 
-            <div class="stat-value">
-                <?= number_format($total_stock) ?>
+            <div class="overview-number">
+                <?= number_format($totalStock) ?>
             </div>
 
-            <div class="stat-note">
-                Total units currently in inventory
-            </div>
+            <p class="overview-description">
+                Total quantity of all products
+            </p>
 
         </div>
 
+        <div class="overview-card">
 
-        <div class="stat-card">
+            <div class="overview-card-top">
 
-            <div class="stat-top">
+                <span class="overview-card-label">Low Stock Products</span>
 
-                <span class="stat-label">
-                    Low Stock Products
-                </span>
-
-                <span class="stat-icon icon-orange">
-                    ⚠️
-                </span>
+                <span class="overview-icon icon-orange">⚠️</span>
 
             </div>
 
-            <div class="stat-value">
-                <?= number_format($low_stock_count) ?>
+            <div class="overview-number">
+                <?= number_format($lowStock) ?>
             </div>
 
-            <div class="stat-note">
+            <p class="overview-description">
                 Products at or below minimum stock
-            </div>
+            </p>
 
         </div>
 
+        <div class="overview-card">
 
-        <div class="stat-card">
+            <div class="overview-card-top">
 
-            <div class="stat-top">
+                <span class="overview-card-label">Out of Stock</span>
 
-                <span class="stat-label">
-                    Out of Stock
-                </span>
-
-                <span class="stat-icon icon-red">
-                    ❌
-                </span>
+                <span class="overview-icon icon-red">❌</span>
 
             </div>
 
-            <div class="stat-value">
-                <?= number_format($out_of_stock_count) ?>
+            <div class="overview-number">
+                <?= number_format($outOfStock) ?>
             </div>
 
-            <div class="stat-note">
-                Products with no available stock
-            </div>
+            <p class="overview-description">
+                Products with zero stock
+            </p>
 
         </div>
 
     </section>
-
 
     <!-- INVENTORY STATUS -->
 
@@ -1682,36 +1814,45 @@ td:first-child {
 
     </div>
 
-    <section class="stats-grid">
+    <section class="status-panel">
 
-        <div class="stat-card">
+        <div class="status-top">
 
-            <div class="stat-top">
+            <h3>Available Products</h3>
 
-                <span class="stat-label">
-                    Inventory Availability
-                </span>
-
-                <span class="stat-icon icon-brown">
-                    📋
-                </span>
-
-            </div>
-
-            <div class="stat-value">
-                <?= number_format($available_percentage, 1) ?>%
-            </div>
-
-            <div class="stat-note">
-                Products with available stock
-            </div>
+            <span class="status-percentage">
+                <?= $availabilityPercentage ?>%
+            </span>
 
         </div>
 
+        <div class="progress-track">
+
+            <div
+                class="progress-fill"
+                style="width: <?= $availabilityPercentage ?>%;"
+            ></div>
+
+        </div>
+
+        <p class="status-description">
+            <?= number_format($availableProducts) ?>
+            out of
+            <?= number_format($totalProducts) ?>
+            products currently have available stock.
+        </p>
+
     </section>
 
-
     <!-- PRODUCT INVENTORY -->
+
+    <div class="section-heading" id="category-products">
+
+        <h2>Product Inventory</h2>
+
+        <span>Manage stock levels by product category</span>
+
+    </div>
 
     <section class="panel">
 
@@ -1719,153 +1860,124 @@ td:first-child {
 
             <div>
 
-                <h2>Product Inventory</h2>
+                <h2>Choose a Product Category</h2>
 
-                <p class="panel-description">
-                    Select a category, then update the stock for each product.
+                <p>
+                    Select a category to view and manage its inventory.
                 </p>
 
             </div>
 
-            <span class="panel-tag">
-                <?= number_format($total_products) ?> items tracked
-            </span>
+            <div class="panel-header-icon">📦</div>
 
         </div>
 
+        <!-- CATEGORY CARDS -->
 
-        <!-- CATEGORY FILTER -->
+        <div class="category-section">
 
-        <div class="category-filter">
+            <h3 class="category-title">
+                Choose a Product Category
+            </h3>
 
-            <p class="category-filter-title">
-                CHOOSE A PRODUCT CATEGORY
-            </p>
+            <div class="category-grid">
 
-            <div class="category-buttons" id="categoryButtons">
+                <!-- ALL PRODUCTS -->
 
-                <button
-                    type="button"
-                    class="category-button active"
-                    data-category="all"
-                    aria-pressed="true">
+                <a
+                    href="<?= e(categoryUrl(0)) ?>#category-products"
+                    class="category-card <?= $selectedCategory === 0 ? 'active' : '' ?>"
+                >
 
-                    <span class="category-icon">🛍️</span>
+                    <div class="category-card-icon">📦</div>
 
-                    <span class="category-button-text">
+                    <div class="category-card-info">
 
-                        <span class="category-name">
+                        <span class="category-card-name">
                             All Products
                         </span>
 
-                        <span class="category-count">
-                            <?= $total_products ?> products
+                        <span class="category-card-count">
+                            <?= number_format($totalRegisteredProducts) ?> products
                         </span>
 
-                    </span>
+                    </div>
 
-                </button>
+                </a>
 
+                <!-- INDIVIDUAL CATEGORIES -->
 
-                <?php foreach ($categories as $category): ?>
+                <?php foreach ($categoryCounts as $cat): ?>
 
-                    <?php
+                    <a
+                        href="<?= e(categoryUrl($cat['category_id'])) ?>#category-products"
+                        class="category-card <?= $selectedCategory === (int)$cat['category_id'] ? 'active' : '' ?>"
+                    >
 
-                    $category_id = (string)$category['category_id'];
+                        <div class="category-card-icon">
+                            <?= getCategoryIcon($cat['category_name']) ?>
+                        </div>
 
-                    $category_count = $category_counts[$category_id] ?? 0;
+                        <div class="category-card-info">
 
-                    $category_name_lower = strtolower($category['category_name']);
-
-                    if (strpos($category_name_lower, 'cake') !== false) {
-                        $category_icon = '🎂';
-
-                    } elseif (strpos($category_name_lower, 'bread') !== false) {
-                        $category_icon = '🍞';
-
-                    } elseif (
-                        strpos($category_name_lower, 'pastry') !== false ||
-                        strpos($category_name_lower, 'croissant') !== false
-                    ) {
-                        $category_icon = '🥐';
-
-                    } elseif (
-                        strpos($category_name_lower, 'cookie') !== false ||
-                        strpos($category_name_lower, 'biscuit') !== false
-                    ) {
-                        $category_icon = '🍪';
-
-                    } elseif (strpos($category_name_lower, 'drink') !== false) {
-                        $category_icon = '🥤';
-
-                    } else {
-                        $category_icon = '🧁';
-                    }
-
-                    ?>
-
-                    <button
-                        type="button"
-                        class="category-button"
-                        data-category="<?= (int)$category['category_id'] ?>"
-                        aria-pressed="false">
-
-                        <span class="category-icon">
-                            <?= $category_icon ?>
-                        </span>
-
-                        <span class="category-button-text">
-
-                            <span class="category-name">
-                                <?= e($category['category_name']) ?>
+                            <span class="category-card-name">
+                                <?= e($cat['category_name']) ?>
                             </span>
 
-                            <span class="category-count">
-                                <?= $category_count ?>
-                                <?= $category_count === 1 ? 'product' : 'products' ?>
+                            <span class="category-card-count">
+                                <?= number_format((int)$cat['product_count']) ?> products
                             </span>
 
-                        </span>
+                        </div>
 
-                    </button>
+                    </a>
 
                 <?php endforeach; ?>
 
+            </div>
 
-                <?php if (isset($category_counts['uncategorized'])): ?>
+            <div class="category-showing">
 
-                    <button
-                        type="button"
-                        class="category-button"
-                        data-category="uncategorized"
-                        aria-pressed="false">
+                <?php if ($selectedCategory > 0): ?>
 
-                        <span class="category-icon">📦</span>
+                    Showing
+                    <strong><?= number_format(count($inventoryProducts)) ?></strong>
+                    products in
+                    <strong><?= e($selectedCategoryName) ?></strong>.
 
-                        <span class="category-button-text">
+                <?php else: ?>
 
-                            <span class="category-name">
-                                Uncategorized
-                            </span>
-
-                            <span class="category-count">
-                                <?= $category_counts['uncategorized'] ?> products
-                            </span>
-
-                        </span>
-
-                    </button>
+                    Showing all
+                    <strong><?= number_format(count($inventoryProducts)) ?></strong>
+                    inventory products.
 
                 <?php endif; ?>
 
             </div>
 
-            <p class="filter-result" id="filterResult">
-                Showing all <?= $total_products ?> products.
-            </p>
-
         </div>
 
+        <!-- INVENTORY TABLE HEADER -->
+
+        <div class="panel-header">
+
+            <div>
+
+                <h2>
+                    <?= e($selectedCategoryName) ?> Inventory
+                </h2>
+
+                <p>
+                    Manage stock in, stock out, and minimum stock levels.
+                </p>
+
+            </div>
+
+            <span class="product-count">
+                📦 <?= number_format(count($inventoryProducts)) ?> Products
+            </span>
+
+        </div>
 
         <!-- INVENTORY TABLE -->
 
@@ -1881,254 +1993,339 @@ td:first-child {
                         <th>Current Stock</th>
                         <th>Minimum Stock</th>
                         <th>Status</th>
-                        <th>Manage Stock</th>
+                        <th>Stock In / Out</th>
+                        <th>Set Minimum</th>
                     </tr>
 
                 </thead>
 
                 <tbody>
 
-                <?php if (empty($products)): ?>
+                    <?php if ($inventoryProducts): ?>
 
-                    <tr>
-                        <td colspan="6" class="empty">
-                            No products found. Add products first.
-                        </td>
-                    </tr>
+                        <?php foreach ($inventoryProducts as $product): ?>
 
-                <?php else: ?>
+                            <?php
 
-                    <?php foreach ($products as $product): ?>
+                            $quantity = (int)$product['quantity'];
+                            $minimum = (int)$product['minimum_stock'];
 
-                        <?php
+                            if ($quantity <= 0) {
+                                $status = 'Out of Stock';
+                                $statusClass = 'status-out';
+                            } elseif ($quantity <= $minimum) {
+                                $status = 'Low Stock';
+                                $statusClass = 'status-low';
+                            } else {
+                                $status = 'In Stock';
+                                $statusClass = 'status-in';
+                            }
 
-                        $quantity = (int)$product['quantity'];
-                        $minimum = (int)$product['minimum_stock'];
+                            ?>
 
-                        $is_low = $quantity <= $minimum;
+                            <tr>
 
-                        $category_data = $product['category_id'] === null
-                            ? 'uncategorized'
-                            : (string)$product['category_id'];
+                                <!-- PRODUCT -->
 
-                        $product_image = getProductImage(
-                            $product['product_name'],
-                            $product['category_name'] ?? ''
-                        );
+                                <td>
 
-                        ?>
+                                    <div class="product-cell">
 
-                        <tr
-                            class="inventory-row"
-                            data-category="<?= e($category_data) ?>">
+                                        <?php if (!empty($product['product_image'])): ?>
 
-                            <!-- PRODUCT NAME WITH AUTOMATIC IMAGE -->
+                                            <img
+                                                src="../uploads/products/<?= rawurlencode($product['product_image']) ?>"
+                                                class="product-thumbnail"
+                                                alt="<?= e($product['product_name']) ?>"
+                                                loading="lazy"
+                                            >
 
-                            <td>
+                                        <?php else: ?>
 
-                                <div class="product-cell">
+                                            <div class="no-product-image">
+                                                <?= getCategoryIcon($product['category_name'] ?? '') ?>
+                                            </div>
 
-                                    <img
-                                        src="<?= e($product_image) ?>"
-                                        alt="<?= e($product['product_name']) ?>"
-                                        class="product-image"
-                                        loading="lazy"
-                                        onerror="this.onerror=null;this.src='https://images.unsplash.com/photo-1509440159596-0249088772ff?w=300&h=220&fit=crop';">
+                                        <?php endif; ?>
 
-                                    <span class="product-name">
-                                        <?= e($product['product_name']) ?>
+                                        <span class="product-name">
+                                            <?= e($product['product_name']) ?>
+                                        </span>
+
+                                    </div>
+
+                                </td>
+
+                                <!-- CATEGORY -->
+
+                                <td>
+
+                                    <span class="category-badge">
+                                        <?= e($product['category_name'] ?? 'Uncategorized') ?>
                                     </span>
 
-                                </div>
+                                </td>
 
-                            </td>
+                                <!-- CURRENT STOCK -->
 
-                            <td>
-                                <?= e($product['category_name'] ?? 'Uncategorized') ?>
-                            </td>
+                                <td>
 
-                            <td>
-                                <strong><?= $quantity ?></strong>
-                            </td>
-
-                            <td>
-                                <?= $minimum ?>
-                            </td>
-
-                            <td>
-
-                                <?php if ($is_low): ?>
-
-                                    <span class="low-stock">
-                                        <?= $quantity === 0 ? 'Out of Stock' : 'Low Stock' ?>
+                                    <span class="stock-number">
+                                        <?= number_format($quantity) ?>
                                     </span>
 
-                                <?php else: ?>
+                                </td>
 
-                                    <span class="normal-stock">
-                                        In Stock
+                                <!-- MINIMUM STOCK -->
+
+                                <td>
+
+                                    <span class="minimum-number">
+                                        <?= number_format($minimum) ?>
                                     </span>
 
-                                <?php endif; ?>
+                                </td>
 
-                            </td>
+                                <!-- STATUS -->
 
-                            <td>
+                                <td>
 
-                                <!-- STOCK IN -->
+                                    <span class="status-badge <?= $statusClass ?>">
+                                        <?= e($status) ?>
+                                    </span>
 
-                                <form method="POST" class="action-form">
+                                </td>
 
-                                    <input
-                                        type="hidden"
-                                        name="product_id"
-                                        value="<?= (int)$product['product_id'] ?>">
+                                <!-- STOCK IN / OUT -->
 
-                                    <input
-                                        type="hidden"
-                                        name="action"
-                                        value="stock_in">
+                                <td>
 
-                                    <input
-                                        type="number"
-                                        name="quantity"
-                                        min="1"
-                                        placeholder="Quantity"
-                                        aria-label="Stock in quantity for <?= e($product['product_name']) ?>"
-                                        required>
+                                    <div class="stock-actions">
 
-                                    <select
-                                        name="remarks_choice"
-                                        class="remark-select"
-                                        required>
+                                        <!-- STOCK IN FORM -->
 
-                                        <option value="">Select Remark</option>
-                                        <option value="New Production">New Production</option>
-                                        <option value="Supplier Delivery">Supplier Delivery</option>
-                                        <option value="Restocking">Restocking</option>
-                                        <option value="Customer Return">Customer Return</option>
-                                        <option value="Stock Adjustment">Stock Adjustment</option>
-                                        <option value="Custom Remark">Custom Remark</option>
+                                        <form
+                                            method="POST"
+                                            class="stock-form"
+                                            onsubmit="return confirmStockIn(this);"
+                                        >
 
-                                    </select>
+                                            <input
+                                                type="hidden"
+                                                name="action"
+                                                value="stock_in"
+                                            >
 
-                                    <input
-                                        type="text"
-                                        name="custom_remarks"
-                                        class="custom-remark"
-                                        placeholder="Enter your remark..."
-                                        aria-label="Custom stock in remark">
+                                            <input
+                                                type="hidden"
+                                                name="product_id"
+                                                value="<?= (int)$product['product_id'] ?>"
+                                            >
 
-                                    <button type="submit" class="stock-in-btn">
-                                        + Stock In
-                                    </button>
+                                            <input
+                                                type="number"
+                                                name="quantity"
+                                                min="1"
+                                                step="1"
+                                                placeholder="Qty"
+                                                required
+                                            >
 
-                                </form>
+                                            <select
+                                                name="remarks_choice"
+                                                class="remarks-choice"
+                                                required
+                                            >
 
+                                                <option value="">
+                                                    Select Remarks
+                                                </option>
 
-                                <!-- STOCK OUT -->
+                                                <option value="New Delivery">
+                                                    New Delivery
+                                                </option>
 
-                                <form method="POST" class="action-form">
+                                                <option value="Restocking">
+                                                    Restocking
+                                                </option>
 
-                                    <input
-                                        type="hidden"
-                                        name="product_id"
-                                        value="<?= (int)$product['product_id'] ?>">
+                                                <option value="Supplier Delivery">
+                                                    Supplier Delivery
+                                                </option>
 
-                                    <input
-                                        type="hidden"
-                                        name="action"
-                                        value="stock_out">
+                                                <option value="Returned Products">
+                                                    Returned Products
+                                                </option>
 
-                                    <input
-                                        type="number"
-                                        name="quantity"
-                                        min="1"
-                                        max="<?= $quantity ?>"
-                                        placeholder="Quantity"
-                                        aria-label="Stock out quantity for <?= e($product['product_name']) ?>"
-                                        required
-                                        <?= $quantity < 1 ? 'disabled' : '' ?>>
+                                                <option value="Stock Adjustment">
+                                                    Stock Adjustment
+                                                </option>
 
-                                    <select
-                                        name="remarks_choice"
-                                        class="remark-select"
-                                        required>
+                                                <option value="Custom Remark">
+                                                    Custom Remark
+                                                </option>
 
-                                        <option value="">Select Remark</option>
-                                        <option value="Sold Products">Sold Products</option>
-                                        <option value="Damaged Products">Damaged Products</option>
-                                        <option value="Expired Products">Expired Products</option>
-                                        <option value="Production Use">Production Use</option>
-                                        <option value="Returned to Supplier">Returned to Supplier</option>
-                                        <option value="Stock Adjustment">Stock Adjustment</option>
-                                        <option value="Custom Remark">Custom Remark</option>
+                                            </select>
 
-                                    </select>
+                                            <input
+                                                type="text"
+                                                name="custom_remarks"
+                                                class="custom-remark"
+                                                placeholder="Enter custom remarks"
+                                                maxlength="255"
+                                            >
 
-                                    <input
-                                        type="text"
-                                        name="custom_remarks"
-                                        class="custom-remark"
-                                        placeholder="Enter your remark..."
-                                        aria-label="Custom stock out remark">
+                                            <button
+                                                type="submit"
+                                                class="btn stock-in-btn"
+                                            >
+                                                + Stock In
+                                            </button>
 
-                                    <button
-                                        type="submit"
-                                        class="stock-out-btn"
-                                        <?= $quantity < 1 ? 'disabled' : '' ?>>
+                                        </form>
 
-                                        − Stock Out
+                                        <!-- STOCK OUT FORM -->
 
-                                    </button>
+                                        <form
+                                            method="POST"
+                                            class="stock-form"
+                                            onsubmit="return confirmStockOut(this, <?= $quantity ?>);"
+                                        >
 
-                                </form>
+                                            <input
+                                                type="hidden"
+                                                name="action"
+                                                value="stock_out"
+                                            >
 
+                                            <input
+                                                type="hidden"
+                                                name="product_id"
+                                                value="<?= (int)$product['product_id'] ?>"
+                                            >
+
+                                            <input
+                                                type="number"
+                                                name="quantity"
+                                                min="1"
+                                                max="<?= $quantity ?>"
+                                                step="1"
+                                                placeholder="Qty"
+                                                required
+                                            >
+
+                                            <select
+                                                name="remarks_choice"
+                                                class="remarks-choice"
+                                                required
+                                            >
+
+                                                <option value="">
+                                                    Select Remarks
+                                                </option>
+
+                                                <option value="Damaged Products">
+                                                    Damaged Products
+                                                </option>
+
+                                                <option value="Expired Products">
+                                                    Expired Products
+                                                </option>
+
+                                                <option value="Used for Production">
+                                                    Used for Production
+                                                </option>
+
+                                                <option value="Customer Order">
+                                                    Customer Order
+                                                </option>
+
+                                                <option value="Stock Correction">
+                                                    Stock Correction
+                                                </option>
+
+                                                <option value="Custom Remark">
+                                                    Custom Remark
+                                                </option>
+
+                                            </select>
+
+                                            <input
+                                                type="text"
+                                                name="custom_remarks"
+                                                class="custom-remark"
+                                                placeholder="Enter custom remarks"
+                                                maxlength="255"
+                                            >
+
+                                            <button
+                                                type="submit"
+                                                class="btn stock-out-btn"
+                                                <?= $quantity <= 0 ? 'disabled' : '' ?>
+                                            >
+                                                − Stock Out
+                                            </button>
+
+                                        </form>
+
+                                    </div>
+
+                                </td>
 
                                 <!-- SET MINIMUM STOCK -->
 
-                                <form method="POST" class="action-form">
+                                <td>
 
-                                    <input
-                                        type="hidden"
-                                        name="product_id"
-                                        value="<?= (int)$product['product_id'] ?>">
+                                    <form method="POST" class="minimum-form">
 
-                                    <input
-                                        type="hidden"
-                                        name="action"
-                                        value="set_minimum">
+                                        <input
+                                            type="hidden"
+                                            name="action"
+                                            value="set_minimum"
+                                        >
 
-                                    <input
-                                        type="number"
-                                        name="minimum_stock"
-                                        min="0"
-                                        value="<?= $minimum ?>"
-                                        aria-label="Minimum stock for <?= e($product['product_name']) ?>"
-                                        required>
+                                        <input
+                                            type="hidden"
+                                            name="product_id"
+                                            value="<?= (int)$product['product_id'] ?>"
+                                        >
 
-                                    <button type="submit" class="minimum-btn">
-                                        Set Minimum
-                                    </button>
+                                        <input
+                                            type="number"
+                                            name="minimum_stock"
+                                            min="0"
+                                            step="1"
+                                            value="<?= $minimum ?>"
+                                            required
+                                        >
 
-                                </form>
+                                        <button
+                                            type="submit"
+                                            class="btn minimum-btn"
+                                            onclick="return confirm('Update minimum stock for <?= e($product['product_name']) ?>?');"
+                                        >
+                                            Save
+                                        </button>
 
+                                    </form>
+
+                                </td>
+
+                            </tr>
+
+                        <?php endforeach; ?>
+
+                    <?php else: ?>
+
+                        <tr>
+
+                            <td colspan="7" class="empty">
+                                No inventory products found in this category.
                             </td>
 
                         </tr>
 
-                    <?php endforeach; ?>
-
-                <?php endif; ?>
-
-
-                <tr class="no-filter-results" style="display:none;">
-
-                    <td colspan="6" class="empty">
-                        No products found in this category.
-                    </td>
-
-                </tr>
+                    <?php endif; ?>
 
                 </tbody>
 
@@ -2138,8 +2335,15 @@ td:first-child {
 
     </section>
 
-
     <!-- RECENT STOCK MOVEMENTS -->
+
+    <div class="section-heading">
+
+        <h2>Recent Stock Movements</h2>
+
+        <span>Latest inventory transactions</span>
+
+    </div>
 
     <section class="panel">
 
@@ -2147,20 +2351,17 @@ td:first-child {
 
             <div>
 
-                <h2>Recent Stock Movements</h2>
+                <h2>Stock Movement History</h2>
 
-                <p class="panel-description">
-                    A record of the latest inventory changes.
+                <p>
+                    Track recent stock additions and deductions.
                 </p>
 
             </div>
 
-            <span class="panel-tag">
-                Latest 20 records
-            </span>
+            <div class="panel-header-icon">📋</div>
 
         </div>
-
 
         <div class="table-wrapper">
 
@@ -2174,75 +2375,80 @@ td:first-child {
                         <th>Movement</th>
                         <th>Quantity</th>
                         <th>Remarks</th>
-                        <th>Processed By</th>
+                        <th>Recorded By</th>
                     </tr>
 
                 </thead>
 
                 <tbody>
 
-                <?php if (empty($movements)): ?>
+                    <?php if ($recentMovements): ?>
 
-                    <tr>
-                        <td colspan="6" class="empty">
-                            No stock movements recorded yet.
-                        </td>
-                    </tr>
+                        <?php foreach ($recentMovements as $movement): ?>
 
-                <?php else: ?>
+                            <?php
 
-                    <?php foreach ($movements as $movement): ?>
+                            $isStockIn = strtoupper($movement['movement_type']) === 'IN';
 
-                        <?php
+                            ?>
 
-                        $movement_class = $movement['movement_type'] === 'stock_in'
-                            ? 'movement-in'
-                            : 'movement-out';
+                            <tr>
 
-                        ?>
+                                <td>
+                                    <?= e(date(
+                                        'M d, Y h:i A',
+                                        strtotime($movement['movement_date'])
+                                    )) ?>
+                                </td>
+
+                                <td>
+
+                                    <span class="product-name">
+                                        <?= e($movement['product_name'] ?? 'Deleted Product') ?>
+                                    </span>
+
+                                </td>
+
+                                <td>
+
+                                    <span class="movement-badge <?= $isStockIn ? 'movement-in' : 'movement-out' ?>">
+                                        <?= $isStockIn ? 'STOCK IN' : 'STOCK OUT' ?>
+                                    </span>
+
+                                </td>
+
+                                <td>
+
+                                    <span class="<?= $isStockIn ? 'quantity-in' : 'quantity-out' ?>">
+                                        <?= $isStockIn ? '+' : '-' ?>
+                                        <?= number_format((int)$movement['quantity']) ?>
+                                    </span>
+
+                                </td>
+
+                                <td>
+                                    <?= e($movement['remarks'] ?? 'No remarks') ?>
+                                </td>
+
+                                <td>
+                                    <?= e($movement['full_name'] ?? 'Unknown User') ?>
+                                </td>
+
+                            </tr>
+
+                        <?php endforeach; ?>
+
+                    <?php else: ?>
 
                         <tr>
 
-                            <td>
-                                <?= e(date(
-                                    'M d, Y h:i A',
-                                    strtotime($movement['movement_date'])
-                                )) ?>
-                            </td>
-
-                            <td>
-                                <?= e($movement['product_name']) ?>
-                            </td>
-
-                            <td>
-
-                                <span class="movement-badge <?= $movement_class ?>">
-                                    <?= e(ucwords(str_replace(
-                                        '_',
-                                        ' ',
-                                        $movement['movement_type']
-                                    ))) ?>
-                                </span>
-
-                            </td>
-
-                            <td>
-                                <?= (int)$movement['quantity'] ?>
-                            </td>
-
-                            <td>
-                                <?= e($movement['remarks'] ?: '-') ?>
-                            </td>
-
-                            <td>
-                                <?= e($movement['full_name']) ?>
+                            <td colspan="6" class="empty">
+                                No stock movements recorded yet.
                             </td>
 
                         </tr>
 
-                    <?php endforeach; ?>
-
-                <?php endif; ?>
+                    <?php endif; ?>
 
                 </tbody>
 
@@ -2251,7 +2457,6 @@ td:first-child {
         </div>
 
     </section>
-
 
     <!-- FOOTER -->
 
@@ -2263,78 +2468,54 @@ td:first-child {
     </footer>
 
 </div>
-</main>
 
+</main>
 
 <script>
 
-// CATEGORY FILTER
+// AUTO-HIDE NOTIFICATION
 
-const categoryButtons = document.querySelectorAll('.category-button');
+const inventoryMessage = document.getElementById("inventoryMessage");
 
-const inventoryRows = document.querySelectorAll('.inventory-row');
+if (inventoryMessage) {
 
-const filterResult = document.getElementById('filterResult');
+    setTimeout(() => {
 
-const noFilterResults = document.querySelector('.no-filter-results');
+        inventoryMessage.style.opacity = "0";
 
-categoryButtons.forEach(function(button) {
+        setTimeout(() => {
+            inventoryMessage.remove();
+        }, 500);
 
-    button.addEventListener('click', function() {
+    }, 3500);
 
-        const selectedCategory = this.dataset.category;
+}
 
-        let visibleCount = 0;
 
-        categoryButtons.forEach(function(categoryButton) {
+// CUSTOM REMARK TOGGLE
 
-            const isActive = categoryButton === button;
+document.querySelectorAll(".stock-form").forEach(function(form) {
 
-            categoryButton.classList.toggle('active', isActive);
+    const remarksSelect = form.querySelector(".remarks-choice");
+    const customRemarks = form.querySelector(".custom-remark");
 
-            categoryButton.setAttribute(
-                'aria-pressed',
-                isActive ? 'true' : 'false'
-            );
+    if (!remarksSelect || !customRemarks) {
+        return;
+    }
 
-        });
+    remarksSelect.addEventListener("change", function() {
 
-        inventoryRows.forEach(function(row) {
+        if (this.value === "Custom Remark") {
 
-            const matches =
-                selectedCategory === 'all' ||
-                row.dataset.category === selectedCategory;
-
-            row.style.display = matches ? '' : 'none';
-
-            if (matches) {
-                visibleCount++;
-            }
-
-        });
-
-        if (noFilterResults) {
-
-            noFilterResults.style.display =
-                visibleCount === 0 ? 'table-row' : 'none';
-
-        }
-
-        const selectedName =
-            this.querySelector('.category-name').textContent.trim();
-
-        if (selectedCategory === 'all') {
-
-            filterResult.textContent =
-                'Showing all ' + visibleCount +
-                (visibleCount === 1 ? ' product.' : ' products.');
+            customRemarks.classList.add("show");
+            customRemarks.required = true;
+            customRemarks.focus();
 
         } else {
 
-            filterResult.textContent =
-                'Showing ' + visibleCount +
-                (visibleCount === 1 ? ' product' : ' products') +
-                ' in ' + selectedName + '.';
+            customRemarks.classList.remove("show");
+            customRemarks.required = false;
+            customRemarks.value = "";
 
         }
 
@@ -2343,63 +2524,124 @@ categoryButtons.forEach(function(button) {
 });
 
 
-// CUSTOM REMARK INPUT
+// STOCK IN CONFIRMATION
 
-document.querySelectorAll('.remark-select').forEach(function(select) {
+function confirmStockIn(form) {
 
-    function toggleCustomRemark() {
+    const quantity = parseInt(
+        form.querySelector('[name="quantity"]').value,
+        10
+    );
 
-        const form = select.closest('form');
+    const remarksChoice = form.querySelector(
+        '[name="remarks_choice"]'
+    ).value;
 
-        const customInput = form.querySelector('.custom-remark');
+    const customRemarks = form.querySelector(
+        '[name="custom_remarks"]'
+    ).value.trim();
 
-        if (select.value === 'Custom Remark') {
+    if (!quantity || quantity <= 0) {
+        alert("Please enter a valid quantity.");
+        return false;
+    }
 
-            customInput.style.display = 'block';
-            customInput.required = true;
+    if (!remarksChoice) {
+        alert("Please select remarks.");
+        return false;
+    }
 
-        } else {
+    if (
+        remarksChoice === "Custom Remark" &&
+        customRemarks === ""
+    ) {
+        alert("Please enter your custom remarks.");
+        return false;
+    }
 
-            customInput.style.display = 'none';
-            customInput.required = false;
-            customInput.value = '';
+    return confirm(
+        "Are you sure you want to add " +
+        quantity +
+        " item(s) to the inventory?"
+    );
+
+}
+
+
+// STOCK OUT CONFIRMATION
+
+function confirmStockOut(form, currentStock) {
+
+    const quantity = parseInt(
+        form.querySelector('[name="quantity"]').value,
+        10
+    );
+
+    const remarksChoice = form.querySelector(
+        '[name="remarks_choice"]'
+    ).value;
+
+    const customRemarks = form.querySelector(
+        '[name="custom_remarks"]'
+    ).value.trim();
+
+    if (!quantity || quantity <= 0) {
+        alert("Please enter a valid quantity.");
+        return false;
+    }
+
+    if (quantity > currentStock) {
+        alert(
+            "Insufficient stock. Current stock is " +
+            currentStock +
+            "."
+        );
+
+        return false;
+    }
+
+    if (!remarksChoice) {
+        alert("Please select remarks.");
+        return false;
+    }
+
+    if (
+        remarksChoice === "Custom Remark" &&
+        customRemarks === ""
+    ) {
+        alert("Please enter your custom remarks.");
+        return false;
+    }
+
+    return confirm(
+        "Are you sure you want to deduct " +
+        quantity +
+        " item(s) from the inventory?"
+    );
+
+}
+
+
+// CATEGORY FILTER SCROLL POSITION
+
+window.addEventListener("load", function() {
+
+    if (window.location.hash === "#category-products") {
+
+        const categorySection = document.getElementById(
+            "category-products"
+        );
+
+        if (categorySection) {
+
+            categorySection.scrollIntoView({
+                behavior: "instant",
+                block: "start"
+            });
 
         }
 
     }
-
-    select.addEventListener('change', toggleCustomRemark);
-
-    toggleCustomRemark();
-
-});
-
-
-// CONFIRM STOCK ACTIONS
-
-document.querySelectorAll('.action-form').forEach(function(form) {
-
-    form.addEventListener('submit', function(event) {
-
-        const action = form.querySelector('input[name="action"]').value;
-
-        if (action === 'stock_in') {
-
-            if (!confirm('Are you sure you want to add this stock?')) {
-                event.preventDefault();
-            }
-
-        }
-
-        if (action === 'stock_out') {
-
-            if (!confirm('Are you sure you want to deduct this stock?')) {
-                event.preventDefault();
-            }
-
-        }
-
-    });
 
 });
 

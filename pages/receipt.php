@@ -27,6 +27,7 @@ try {
             s.payment_amount,
             s.change_amount,
             s.sale_date,
+            s.customer_name,
             u.full_name
         FROM sales s
         INNER JOIN users u ON s.user_id = u.user_id
@@ -204,11 +205,17 @@ function peso($amount) {
     <hr>
 
     <div class="details">
-        <strong>Receipt No:</strong> #<?= (int)$sale['sale_id'] ?><br>
+        <strong>Receipt No:</strong>
+        #<?= (int)$sale['sale_id'] ?><br>
 
         <strong>Date:</strong>
         <?= htmlspecialchars(date('M d, Y h:i A', strtotime($sale['sale_date']))) ?><br>
-        
+
+        <?php if (!empty(trim($sale['customer_name'] ?? ''))): ?>
+            <strong>Customer Name:</strong>
+            <?= htmlspecialchars($sale['customer_name']) ?><br>
+        <?php endif; ?>
+
         <strong>Cashier:</strong>
         <?= htmlspecialchars($sale['full_name']) ?>
     </div>

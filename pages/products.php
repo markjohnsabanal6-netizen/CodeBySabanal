@@ -131,8 +131,8 @@ if (isset($_GET['added'])) {
     $message = "Product added successfully!";
 } elseif (isset($_GET['updated'])) {
     $message = "Product updated successfully!";
-} elseif (isset($_GET['deleted'])) {
-    $message = "Product deleted successfully!";
+} elseif (isset($_GET['archived'])) {
+    $message = "Product archived successfully! It has been removed from active products, sales, and inventory.";
 }
 
 // ADD PRODUCT
@@ -303,8 +303,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
     }
 }
 
-// DELETE PRODUCT
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete') {
+// ARCHIVE PRODUCT (SOFT DELETE)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'archive') {
 
     $id = (int)($_POST['product_id'] ?? 0);
 
@@ -313,66 +313,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
             throw new Exception("Invalid product.");
         }
 
-        $checkSales = $conn->prepare(
-            "SELECT COUNT(*) FROM sale_details WHERE product_id = ?"
+        $archiveStmt = $conn->prepare(
+            "UPDATE products SET is_archived = 1 WHERE product_id = ? AND is_archived = 0"
         );
-        $checkSales->execute([$id]);
+        $archiveStmt->execute([$id]);
 
-        $checkMovements = $conn->prepare(
-            "SELECT COUNT(*) FROM stock_movements WHERE product_id = ?"
-        );
-        $checkMovements->execute([$id]);
-
-        if (
-            $checkSales->fetchColumn() > 0 ||
-            $checkMovements->fetchColumn() > 0
-        ) {
-            $message = "Cannot delete: This product already has transaction records.";
-            $messageType = 'error';
-
-        } else {
-
-            $imageStmt = $conn->prepare(
-                "SELECT product_image FROM products WHERE product_id = ?"
-            );
-            $imageStmt->execute([$id]);
-
-            $productToDelete = $imageStmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$productToDelete) {
-                throw new Exception("Product not found.");
-            }
-
-            $conn->beginTransaction();
-
-            $deleteInventory = $conn->prepare(
-                "DELETE FROM inventory WHERE product_id = ?"
-            );
-            $deleteInventory->execute([$id]);
-
-            $deleteProduct = $conn->prepare(
-                "DELETE FROM products WHERE product_id = ?"
-            );
-            $deleteProduct->execute([$id]);
-
-            $conn->commit();
-
-            deleteProductImage(
-                $productToDelete['product_image'] ?? null,
-                $uploadDirectory
-            );
-
-            header("Location: products.php?deleted=1");
-            exit;
+        if ($archiveStmt->rowCount() === 0) {
+            throw new Exception("Product not found or already archived.");
         }
+
+        // Preserve inventory, product image, sales, and stock movement history.
+        header("Location: products.php?archived=1");
+        exit;
 
     } catch (Exception $e) {
-
-        if ($conn->inTransaction()) {
-            $conn->rollBack();
-        }
-
-        $message = "Unable to delete product.";
+        $message = $e instanceof PDOException
+            ? "Unable to archive product. Please check your database."
+            : $e->getMessage();
         $messageType = 'error';
     }
 }
@@ -383,7 +340,7 @@ if (isset($_GET['edit'])) {
     $id = (int)$_GET['edit'];
 
     $stmt = $conn->prepare(
-        "SELECT * FROM products WHERE product_id = ?"
+        "SELECT * FROM products WHERE product_id = ? AND is_archived = 0"
     );
     $stmt->execute([$id]);
 
@@ -404,7 +361,7 @@ $categoryCountStmt = $conn->query("
         COUNT(p.product_id) AS product_count
     FROM categories c
     LEFT JOIN products p
-        ON c.category_id = p.category_id
+        ON c.category_id = p.category_id AND p.is_archived = 0
     GROUP BY c.category_id, c.category_name
     ORDER BY c.category_name ASC
 ");
@@ -413,7 +370,7 @@ $categoryCounts = $categoryCountStmt->fetchAll(PDO::FETCH_ASSOC);
 
 // PRODUCT STATISTICS
 $totalRegisteredProducts = (int)$conn->query(
-    "SELECT COUNT(*) FROM products"
+    "SELECT COUNT(*) FROM products WHERE is_archived = 0"
 )->fetchColumn();
 
 $totalCategories = (int)$conn->query(
@@ -423,8 +380,9 @@ $totalCategories = (int)$conn->query(
 $uncategorizedProducts = (int)$conn->query(
     "SELECT COUNT(*)
      FROM products
-     WHERE category_id IS NULL
-        OR category_id NOT IN (SELECT category_id FROM categories)"
+     WHERE is_archived = 0
+       AND (category_id IS NULL
+        OR category_id NOT IN (SELECT category_id FROM categories))"
 )->fetchColumn();
 
 // SEARCH AND CATEGORY FILTER
@@ -434,7 +392,7 @@ $selectedCategory = (int)($_GET['category'] ?? 0);
 $sql = "SELECT p.*, c.category_name
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.category_id
-        WHERE 1=1";
+        WHERE p.is_archived = 0";
 
 $params = [];
 
@@ -2228,10 +2186,10 @@ td {
 
                                         <form
                                             method="POST"
-                                            onsubmit="return confirm('Are you sure you want to delete this product?');"
+                                            onsubmit="return confirm('Archive this product? It will be hidden from active products, sales, and inventory. Existing records will be preserved.');"
                                         >
 
-                                            <input type="hidden" name="action" value="delete">
+                                            <input type="hidden" name="action" value="archive">
 
                                             <input
                                                 type="hidden"
@@ -2240,7 +2198,7 @@ td {
                                             >
 
                                             <button type="submit" class="btn delete-btn">
-                                                🗑 Delete
+                                                📦 Archive
                                             </button>
 
                                         </form>
