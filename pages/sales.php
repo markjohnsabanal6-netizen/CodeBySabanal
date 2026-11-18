@@ -247,25 +247,31 @@
         }
     }
 
-    // PRODUCT IMAGE LOCATION
+    // IMAGE LOCATIONS
     $uploadUrl = '../uploads/products/';
 
     // CATEGORY ICON HELPER
     function getCategoryIcon($categoryName) {
         $name = strtolower((string)$categoryName);
+
         if (strpos($name, 'bread') !== false) return '🍞';
         if (strpos($name, 'cake') !== false) return '🎂';
         if (strpos($name, 'cookie') !== false) return '🍪';
         if (strpos($name, 'pastry') !== false) return '🥐';
         if (strpos($name, 'drink') !== false) return '🥤';
+        if (strpos($name, 'beverage') !== false) return '🥤';
         if (strpos($name, 'donut') !== false) return '🍩';
         if (strpos($name, 'muffin') !== false) return '🧁';
+
         return '🧁';
     }
 
-    // GET ALL CATEGORIES
+    // GET ALL CATEGORIES WITH CATEGORY IMAGES
     $categoryStmt = $conn->query("
-        SELECT category_id, category_name
+        SELECT
+            category_id,
+            category_name,
+            category_image
         FROM categories
         ORDER BY category_name ASC
     ");
@@ -1023,9 +1029,17 @@ tbody tr:hover {
     width: 48px;
     height: 48px;
     flex-shrink: 0;
+    overflow: hidden;
     border-radius: 13px;
     background: #f1e5d9;
     font-size: 24px;
+}
+
+.category-card-icon img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .category-card.active .category-card-icon {
@@ -1979,7 +1993,19 @@ tbody tr:hover {
                 </button>
 
                 <?php foreach ($categories as $category): ?>
-                    <?php $categoryId = (int)$category['category_id']; ?>
+
+                    <?php
+                        $categoryId = (int)$category['category_id'];
+
+                        // Database already stores: uploads/categories/filename.ext
+                        // Since this file is inside /pages, prefix only ../.
+                        $categoryImage = !empty($category['category_image'])
+                            ? '../' . implode('/', array_map(
+                                'rawurlencode',
+                                explode('/', ltrim($category['category_image'], '/'))
+                            ))
+                            : '';
+                    ?>
 
                     <button
                         type="button"
@@ -1988,10 +2014,32 @@ tbody tr:hover {
                         aria-pressed="false">
 
                         <span class="category-card-icon">
-                            <?= getCategoryIcon($category['category_name']) ?>
+
+                            <?php if ($categoryImage !== ''): ?>
+
+                                <img
+                                    src="<?= h($categoryImage) ?>"
+                                    alt="<?= h($category['category_name']) ?>"
+                                    loading="lazy"
+                                    onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
+                                >
+
+                                <span
+                                    class="category-icon-fallback"
+                                    style="display:none; width:100%; height:100%; align-items:center; justify-content:center;">
+                                    <?= h(getCategoryIcon($category['category_name'])) ?>
+                                </span>
+
+                            <?php else: ?>
+
+                                <?= h(getCategoryIcon($category['category_name'])) ?>
+
+                            <?php endif; ?>
+
                         </span>
 
                         <span class="category-card-info">
+
                             <span class="category-card-name">
                                 <?= h($category['category_name']) ?>
                             </span>
@@ -1999,9 +2047,11 @@ tbody tr:hover {
                             <span class="category-card-count">
                                 <?= number_format($categoryCounts[$categoryId] ?? 0) ?> products
                             </span>
+
                         </span>
 
                     </button>
+
                 <?php endforeach; ?>
 
             </div>
@@ -2498,7 +2548,6 @@ function showProductPreview(card) {
     previewCategory.textContent = category;
     previewPrice.textContent = formatPeso(price);
 
-    // Reset preview quantity
     previewQuantity.value = 1;
     previewQuantity.max = stock > 0 ? stock : 1;
 
@@ -2650,8 +2699,6 @@ productCards.forEach(card => {
 
         const stock = Number(this.dataset.productStock || 0);
 
-        // Do not select out-of-stock products for the cart.
-        // They can still be opened using double-click.
         if (stock <= 0) {
             return;
         }

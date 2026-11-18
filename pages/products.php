@@ -1,3 +1,4 @@
+
 <?php
 session_start();
 require_once '../config/database.php';
@@ -19,6 +20,17 @@ $isAdmin = ($role === 'admin');
 $message = '';
 $messageType = 'success';
 $editProduct = null;
+
+// BEVERAGE PRODUCT TYPES
+$beverageTypes = [
+    'Softdrinks',
+    'Water',
+    'Juice',
+    'Ice Coffee',
+    'Shake',
+    'Coffee',
+    'Milk Tea'
+];
 
 // IMAGE UPLOAD SETTINGS
 $uploadDirectory = __DIR__ . '/../uploads/products/';
@@ -90,10 +102,10 @@ function deleteProductImage($filename, $uploadDirectory)
     }
 }
 
-// CATEGORY ICON
+// CATEGORY ICON FALLBACK
 function getCategoryIcon($categoryName)
 {
-    $name = strtolower($categoryName);
+    $name = strtolower($categoryName ?? '');
 
     if (strpos($name, 'bread') !== false) {
         return '🍞';
@@ -126,6 +138,28 @@ function getCategoryIcon($categoryName)
     return '🧁';
 }
 
+// GET CATEGORY IMAGE URL
+function getCategoryImageUrl($categoryImage)
+{
+    if (empty($categoryImage)) {
+        return null;
+    }
+
+    $imagePath = ltrim($categoryImage, '/');
+
+    if (strpos($imagePath, 'uploads/categories/') !== 0) {
+        $imagePath = 'uploads/categories/' . basename($imagePath);
+    }
+
+    return '../' . $imagePath;
+}
+
+// CHECK WHETHER CATEGORY IS BEVERAGES
+function isBeveragesCategory($categoryName)
+{
+    return strcasecmp(trim((string)$categoryName), 'Beverages') === 0;
+}
+
 // NOTIFICATIONS
 if (isset($_GET['added'])) {
     $message = "Product added successfully!";
@@ -140,6 +174,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add')
 
     $productName = trim($_POST['product_name'] ?? '');
     $category = (int)($_POST['category_id'] ?? 0);
+    $productType = trim($_POST['product_type'] ?? '');
     $description = trim($_POST['description'] ?? '');
     $price = $_POST['price'] ?? '';
 
@@ -156,16 +191,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add')
 
     } else {
         try {
+            // GET SELECTED CATEGORY NAME
             $check = $conn->prepare(
-                "SELECT COUNT(*) FROM categories WHERE category_id = ?"
+                "SELECT category_name FROM categories WHERE category_id = ?"
             );
             $check->execute([$category]);
 
-            if (!$check->fetchColumn()) {
+            $selectedCategoryName = $check->fetchColumn();
+
+            if (!$selectedCategoryName) {
                 $message = "Selected category does not exist.";
                 $messageType = 'error';
 
             } else {
+                // PRODUCT TYPE IS REQUIRED ONLY FOR BEVERAGES
+                if (isBeveragesCategory($selectedCategoryName)) {
+
+                    if (!in_array($productType, $beverageTypes, true)) {
+                        throw new Exception("Please select a valid beverage product type.");
+                    }
+
+                } else {
+                    $productType = null;
+                }
 
                 $uploadedImage = uploadProductImage(
                     $_FILES['product_image'] ?? null,
@@ -175,12 +223,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add')
 
                 $stmt = $conn->prepare(
                     "INSERT INTO products
-                    (category_id, product_name, description, price, product_image)
-                    VALUES (?, ?, ?, ?, ?)"
+                    (category_id, product_type, product_name, description, price, product_image)
+                    VALUES (?, ?, ?, ?, ?, ?)"
                 );
 
                 $stmt->execute([
                     $category,
+                    $productType,
                     $productName,
                     $description,
                     (float)$price,
@@ -212,6 +261,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
     $id = (int)($_POST['product_id'] ?? 0);
     $productName = trim($_POST['product_name'] ?? '');
     $category = (int)($_POST['category_id'] ?? 0);
+    $productType = trim($_POST['product_type'] ?? '');
     $description = trim($_POST['description'] ?? '');
     $price = $_POST['price'] ?? '';
 
@@ -229,16 +279,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
 
     } else {
         try {
+            // GET SELECTED CATEGORY NAME
             $check = $conn->prepare(
-                "SELECT COUNT(*) FROM categories WHERE category_id = ?"
+                "SELECT category_name FROM categories WHERE category_id = ?"
             );
             $check->execute([$category]);
 
-            if (!$check->fetchColumn()) {
+            $selectedCategoryName = $check->fetchColumn();
+
+            if (!$selectedCategoryName) {
                 $message = "Selected category does not exist.";
                 $messageType = 'error';
 
             } else {
+                // PRODUCT TYPE IS REQUIRED ONLY FOR BEVERAGES
+                if (isBeveragesCategory($selectedCategoryName)) {
+
+                    if (!in_array($productType, $beverageTypes, true)) {
+                        throw new Exception("Please select a valid beverage product type.");
+                    }
+
+                } else {
+                    $productType = null;
+                }
 
                 $currentStmt = $conn->prepare(
                     "SELECT product_image FROM products WHERE product_id = ?"
@@ -264,6 +327,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
                 $stmt = $conn->prepare(
                     "UPDATE products
                      SET category_id = ?,
+                         product_type = ?,
                          product_name = ?,
                          description = ?,
                          price = ?,
@@ -273,6 +337,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
 
                 $stmt->execute([
                     $category,
+                    $productType,
                     $productName,
                     $description,
                     (float)$price,
@@ -322,7 +387,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'archi
             throw new Exception("Product not found or already archived.");
         }
 
-        // Preserve inventory, product image, sales, and stock movement history.
         header("Location: products.php?archived=1");
         exit;
 
@@ -353,16 +417,21 @@ $categoryStmt = $conn->query(
 );
 $categories = $categoryStmt->fetchAll(PDO::FETCH_ASSOC);
 
-// GET CATEGORY PRODUCT COUNTS
+// GET CATEGORY PRODUCT COUNTS AND IMAGES
 $categoryCountStmt = $conn->query("
     SELECT
         c.category_id,
         c.category_name,
+        c.category_image,
         COUNT(p.product_id) AS product_count
     FROM categories c
     LEFT JOIN products p
-        ON c.category_id = p.category_id AND p.is_archived = 0
-    GROUP BY c.category_id, c.category_name
+        ON c.category_id = p.category_id
+        AND p.is_archived = 0
+    GROUP BY
+        c.category_id,
+        c.category_name,
+        c.category_image
     ORDER BY c.category_name ASC
 ");
 
@@ -389,9 +458,14 @@ $uncategorizedProducts = (int)$conn->query(
 $search = trim($_GET['search'] ?? '');
 $selectedCategory = (int)($_GET['category'] ?? 0);
 
-$sql = "SELECT p.*, c.category_name
+// PRODUCT QUERY
+$sql = "SELECT
+            p.*,
+            c.category_name,
+            c.category_image
         FROM products p
-        LEFT JOIN categories c ON p.category_id = c.category_id
+        LEFT JOIN categories c
+            ON p.category_id = c.category_id
         WHERE p.is_archived = 0";
 
 $params = [];
@@ -400,6 +474,7 @@ if ($search !== '') {
     $sql .= " AND (
         p.product_name LIKE :search
         OR c.category_name LIKE :search
+        OR p.product_type LIKE :search
     )";
 
     $params['search'] = "%$search%";
@@ -907,6 +982,23 @@ input[type="file"] {
     font-size: 10px;
 }
 
+/* PRODUCT TYPE */
+
+.product-type-group {
+    display: none;
+}
+
+.product-type-group.show {
+    display: block;
+}
+
+.product-type-hint {
+    display: block;
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 10px;
+}
+
 .form-actions {
     display: flex;
     align-items: center;
@@ -1051,9 +1143,17 @@ input[type="file"] {
     width: 54px;
     height: 54px;
     flex-shrink: 0;
+    overflow: hidden;
     border-radius: 15px;
     background: #f1e5d9;
     font-size: 27px;
+}
+
+.category-card-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
 }
 
 .category-card.active .category-card-icon {
@@ -1165,7 +1265,7 @@ input[type="file"] {
 
 table {
     width: 100%;
-    min-width: 800px;
+    min-width: 900px;
     border-collapse: collapse;
 }
 
@@ -1222,13 +1322,41 @@ td {
 }
 
 .category-badge {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
     padding: 5px 9px;
     border-radius: 20px;
     background: #f2e7db;
     color: var(--brown);
     font-size: 9px;
     font-weight: 700;
+    white-space: nowrap;
+}
+
+.category-badge img {
+    width: 25px;
+    height: 25px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid rgba(84, 53, 31, .12);
+}
+
+.product-type-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 20px;
+    background: #e8f2ed;
+    color: #34734a;
+    font-size: 9px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.no-product-type {
+    color: #aaa096;
+    font-size: 10px;
 }
 
 .price {
@@ -1720,12 +1848,17 @@ td {
                     <div class="form-group">
                         <label>Category</label>
 
-                        <select name="category_id" required>
+                        <select
+                            name="category_id"
+                            id="editCategory"
+                            required
+                        >
                             <option value="">Select Category</option>
 
                             <?php foreach ($categories as $category): ?>
                                 <option
                                     value="<?= (int)$category['category_id'] ?>"
+                                    data-category-name="<?= htmlspecialchars($category['category_name'], ENT_QUOTES, 'UTF-8') ?>"
                                     <?= $editProduct['category_id'] == $category['category_id'] ? 'selected' : '' ?>
                                 >
                                     <?= htmlspecialchars($category['category_name'], ENT_QUOTES, 'UTF-8') ?>
@@ -1733,6 +1866,33 @@ td {
                             <?php endforeach; ?>
 
                         </select>
+                    </div>
+
+                    <!-- EDIT PRODUCT TYPE -->
+
+                    <div class="form-group product-type-group" id="editProductTypeGroup">
+                        <label for="editProductType">Product Type</label>
+
+                        <select
+                            name="product_type"
+                            id="editProductType"
+                        >
+                            <option value="">Select Product Type</option>
+
+                            <?php foreach ($beverageTypes as $type): ?>
+                                <option
+                                    value="<?= htmlspecialchars($type, ENT_QUOTES, 'UTF-8') ?>"
+                                    <?= ($editProduct['product_type'] ?? '') === $type ? 'selected' : '' ?>
+                                >
+                                    <?= htmlspecialchars($type, ENT_QUOTES, 'UTF-8') ?>
+                                </option>
+                            <?php endforeach; ?>
+
+                        </select>
+
+                        <span class="product-type-hint">
+                            Select the type of beverage.
+                        </span>
                     </div>
 
                     <div class="form-group">
@@ -1850,16 +2010,47 @@ td {
                         <div class="form-group">
                             <label>Category</label>
 
-                            <select name="category_id" required>
+                            <select
+                                name="category_id"
+                                id="addCategory"
+                                required
+                            >
                                 <option value="">Select Category</option>
 
                                 <?php foreach ($categories as $category): ?>
-                                    <option value="<?= (int)$category['category_id'] ?>">
+                                    <option
+                                        value="<?= (int)$category['category_id'] ?>"
+                                        data-category-name="<?= htmlspecialchars($category['category_name'], ENT_QUOTES, 'UTF-8') ?>"
+                                    >
                                         <?= htmlspecialchars($category['category_name'], ENT_QUOTES, 'UTF-8') ?>
                                     </option>
                                 <?php endforeach; ?>
 
                             </select>
+                        </div>
+
+                        <!-- ADD PRODUCT TYPE -->
+
+                        <div class="form-group product-type-group" id="addProductTypeGroup">
+                            <label for="addProductType">Product Type</label>
+
+                            <select
+                                name="product_type"
+                                id="addProductType"
+                            >
+                                <option value="">Select Product Type</option>
+
+                                <?php foreach ($beverageTypes as $type): ?>
+                                    <option value="<?= htmlspecialchars($type, ENT_QUOTES, 'UTF-8') ?>">
+                                        <?= htmlspecialchars($type, ENT_QUOTES, 'UTF-8') ?>
+                                    </option>
+                                <?php endforeach; ?>
+
+                            </select>
+
+                            <span class="product-type-hint">
+                                Select the type of beverage.
+                            </span>
                         </div>
 
                         <div class="form-group">
@@ -2007,7 +2198,25 @@ td {
                     >
 
                         <div class="category-card-icon">
-                            <?= getCategoryIcon($cat['category_name']) ?>
+
+                            <?php if (!empty($cat['category_image'])): ?>
+
+                                <img
+                                    src="<?= htmlspecialchars(
+                                        getCategoryImageUrl($cat['category_image']),
+                                        ENT_QUOTES,
+                                        'UTF-8'
+                                    ) ?>"
+                                    alt="<?= htmlspecialchars($cat['category_name'], ENT_QUOTES, 'UTF-8') ?>"
+                                    loading="lazy"
+                                >
+
+                            <?php else: ?>
+
+                                <?= getCategoryIcon($cat['category_name']) ?>
+
+                            <?php endif; ?>
+
                         </div>
 
                         <div class="category-card-info">
@@ -2112,6 +2321,7 @@ td {
                         <th>ID</th>
                         <th>Product Name</th>
                         <th>Category</th>
+                        <th>Product Type</th>
                         <th>Price</th>
                         <th>Description</th>
                         <th>Actions</th>
@@ -2159,10 +2369,56 @@ td {
 
                                 </td>
 
+                                <!-- CATEGORY NAME WITH CATEGORY IMAGE -->
+
                                 <td>
+
                                     <span class="category-badge">
-                                        <?= htmlspecialchars($product['category_name'] ?? 'Uncategorized', ENT_QUOTES, 'UTF-8') ?>
+
+                                        <?php if (!empty($product['category_image'])): ?>
+
+                                            <img
+                                                src="<?= htmlspecialchars(
+                                                    getCategoryImageUrl($product['category_image']),
+                                                    ENT_QUOTES,
+                                                    'UTF-8'
+                                                ) ?>"
+                                                alt=""
+                                                loading="lazy"
+                                            >
+
+                                        <?php else: ?>
+
+                                            <?= getCategoryIcon($product['category_name'] ?? '') ?>
+
+                                        <?php endif; ?>
+
+                                        <?= htmlspecialchars(
+                                            $product['category_name'] ?? 'Uncategorized',
+                                            ENT_QUOTES,
+                                            'UTF-8'
+                                        ) ?>
+
                                     </span>
+
+                                </td>
+
+                                <!-- PRODUCT TYPE -->
+
+                                <td>
+
+                                    <?php if (!empty($product['product_type'])): ?>
+
+                                        <span class="product-type-badge">
+                                            <?= htmlspecialchars($product['product_type'], ENT_QUOTES, 'UTF-8') ?>
+                                        </span>
+
+                                    <?php else: ?>
+
+                                        <span class="no-product-type">—</span>
+
+                                    <?php endif; ?>
+
                                 </td>
 
                                 <td class="price">
@@ -2214,7 +2470,7 @@ td {
                     <?php else: ?>
 
                         <tr>
-                            <td colspan="6" class="empty">
+                            <td colspan="7" class="empty">
                                 No products found for the selected search or category.
                             </td>
                         </tr>
@@ -2254,6 +2510,64 @@ if (message) {
 
     }, 3000);
 }
+
+// CONDITIONAL BEVERAGE PRODUCT TYPE
+
+function setupProductType(categoryId, groupId, typeId) {
+
+    const categorySelect = document.getElementById(categoryId);
+    const productTypeGroup = document.getElementById(groupId);
+    const productTypeSelect = document.getElementById(typeId);
+
+    if (!categorySelect || !productTypeGroup || !productTypeSelect) {
+        return;
+    }
+
+    function updateProductTypeVisibility() {
+
+        const selectedOption =
+            categorySelect.options[categorySelect.selectedIndex];
+
+        const categoryName = selectedOption
+            ? (selectedOption.dataset.categoryName || selectedOption.textContent.trim())
+            : '';
+
+        const isBeverages =
+            categoryName.trim().toLowerCase() === 'beverages';
+
+        if (isBeverages) {
+
+            productTypeGroup.classList.add('show');
+            productTypeSelect.required = true;
+
+        } else {
+
+            productTypeGroup.classList.remove('show');
+            productTypeSelect.required = false;
+            productTypeSelect.value = '';
+
+        }
+    }
+
+    categorySelect.addEventListener('change', updateProductTypeVisibility);
+
+    // INITIAL CHECK, IMPORTANT FOR EDIT FORM
+    updateProductTypeVisibility();
+}
+
+// ADD FORM
+setupProductType(
+    'addCategory',
+    'addProductTypeGroup',
+    'addProductType'
+);
+
+// EDIT FORM
+setupProductType(
+    'editCategory',
+    'editProductTypeGroup',
+    'editProductType'
+);
 
 // IMAGE PREVIEW
 

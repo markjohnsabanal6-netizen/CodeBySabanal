@@ -1,3 +1,4 @@
+
 <?php
 
 date_default_timezone_set('America/Los_Angeles');
@@ -38,7 +39,7 @@ function e($value)
     return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
 }
 
-// CATEGORY ICON
+// CATEGORY ICON FALLBACK
 function getCategoryIcon($categoryName)
 {
     $name = strtolower((string)$categoryName);
@@ -76,6 +77,23 @@ function getCategoryIcon($categoryName)
     }
 
     return '🧁';
+}
+
+// CATEGORY IMAGE URL
+function getCategoryImageUrl($image)
+{
+    if (empty($image)) {
+        return '';
+    }
+
+    $image = str_replace('\\', '/', (string)$image);
+    $fileName = basename($image);
+
+    if ($fileName === '' || $fileName === '.' || $fileName === '..') {
+        return '';
+    }
+
+    return '../uploads/categories/' . rawurlencode($fileName);
 }
 
 // GET NOTIFICATIONS
@@ -323,11 +341,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // CATEGORY FILTER
 $selectedCategory = (int)($_GET['category'] ?? 0);
 
-// GET CATEGORIES AND PRODUCT COUNTS
+// GET CATEGORIES, IMAGES AND PRODUCT COUNTS
 $categoryCountStmt = $conn->query("
     SELECT
         c.category_id,
         c.category_name,
+        c.category_image,
         COUNT(p.product_id) AS product_count
     FROM categories c
     LEFT JOIN products p
@@ -335,7 +354,8 @@ $categoryCountStmt = $conn->query("
         AND p.is_archived = 0
     GROUP BY
         c.category_id,
-        c.category_name
+        c.category_name,
+        c.category_image
     ORDER BY c.category_name ASC
 ");
 
@@ -349,6 +369,7 @@ $totalRegisteredProducts = (int)$conn->query("
 ")->fetchColumn();
 
 // GET INVENTORY PRODUCTS
+// ADDED: c.category_image
 $inventorySql = "
     SELECT
         p.product_id,
@@ -358,6 +379,7 @@ $inventorySql = "
         p.is_archived,
         c.category_id,
         c.category_name,
+        c.category_image,
         i.quantity,
         i.minimum_stock
     FROM products p
@@ -956,7 +978,7 @@ body {
     font-size: 10px;
 }
 
-/* CATEGORY CARDS - MATCH PRODUCTS PAGE */
+/* CATEGORY CARDS */
 
 .category-section {
     margin-bottom: 22px;
@@ -1006,6 +1028,9 @@ body {
     box-shadow: 0 6px 15px rgba(84,53,31,.15);
 }
 
+/* CATEGORY IMAGE */
+
+.category-card-image,
 .category-card-icon {
     display: flex;
     align-items: center;
@@ -1015,6 +1040,14 @@ body {
     flex-shrink: 0;
     border-radius: 15px;
     background: #f1e5d9;
+}
+
+.category-card-image {
+    object-fit: cover;
+    border: 1px solid #eee1d5;
+}
+
+.category-card-icon {
     font-size: 27px;
 }
 
@@ -1279,6 +1312,37 @@ td {
 .product-name {
     color: var(--brown);
     font-weight: 700;
+}
+
+/* CATEGORY IMAGE IN INVENTORY TABLE */
+
+.product-category-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 150px;
+}
+
+.category-thumbnail {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    object-fit: cover;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: #faf8f5;
+}
+
+.category-fallback-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 7px;
+    background: #f2e7db;
+    font-size: 17px;
 }
 
 .category-badge {
@@ -1914,9 +1978,22 @@ td {
                         class="category-card <?= $selectedCategory === (int)$cat['category_id'] ? 'active' : '' ?>"
                     >
 
-                        <div class="category-card-icon">
-                            <?= getCategoryIcon($cat['category_name']) ?>
-                        </div>
+                        <?php if (!empty($cat['category_image'])): ?>
+
+                            <img
+                                src="<?= e(getCategoryImageUrl($cat['category_image'])) ?>"
+                                class="category-card-image"
+                                alt="<?= e($cat['category_name']) ?>"
+                                loading="lazy"
+                            >
+
+                        <?php else: ?>
+
+                            <div class="category-card-icon">
+                                <?= getCategoryIcon($cat['category_name']) ?>
+                            </div>
+
+                        <?php endif; ?>
 
                         <div class="category-card-info">
 
@@ -2034,7 +2111,7 @@ td {
                                         <?php if (!empty($product['product_image'])): ?>
 
                                             <img
-                                                src="../uploads/products/<?= rawurlencode($product['product_image']) ?>"
+                                                src="../uploads/products/<?= rawurlencode(basename($product['product_image'])) ?>"
                                                 class="product-thumbnail"
                                                 alt="<?= e($product['product_name']) ?>"
                                                 loading="lazy"
@@ -2056,13 +2133,34 @@ td {
 
                                 </td>
 
-                                <!-- CATEGORY -->
+                                <!-- CATEGORY WITH IMAGE -->
 
                                 <td>
 
-                                    <span class="category-badge">
-                                        <?= e($product['category_name'] ?? 'Uncategorized') ?>
-                                    </span>
+                                    <div class="product-category-cell">
+
+                                        <?php if (!empty($product['category_image'])): ?>
+
+                                            <img
+                                                src="<?= e(getCategoryImageUrl($product['category_image'])) ?>"
+                                                class="category-thumbnail"
+                                                alt="<?= e($product['category_name'] ?? 'Category') ?>"
+                                                loading="lazy"
+                                            >
+
+                                        <?php else: ?>
+
+                                            <span class="category-fallback-icon">
+                                                <?= getCategoryIcon($product['category_name'] ?? '') ?>
+                                            </span>
+
+                                        <?php endif; ?>
+
+                                        <span class="category-badge">
+                                            <?= e($product['category_name'] ?? 'Uncategorized') ?>
+                                        </span>
+
+                                    </div>
 
                                 </td>
 

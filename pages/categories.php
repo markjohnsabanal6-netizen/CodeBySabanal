@@ -1,3 +1,4 @@
+
 <?php
 session_start();
 require_once '../config/database.php';
@@ -24,7 +25,76 @@ $messageType = 'success';
 $formName = '';
 $formDescription = '';
 
-// NOTIFICATIONS AFTER REDIRECT
+$uploadDirectory = __DIR__ . '/../uploads/categories/';
+$uploadDatabasePath = 'uploads/categories/';
+
+// CREATE UPLOAD DIRECTORY
+if (!is_dir($uploadDirectory)) {
+    mkdir($uploadDirectory, 0755, true);
+}
+
+// UPLOAD CATEGORY IMAGE
+function uploadCategoryImage($file, $uploadDirectory)
+{
+    if (!isset($file) || $file['error'] === UPLOAD_ERR_NO_FILE) {
+        return null;
+    }
+
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        throw new RuntimeException("Image upload failed. Please try again.");
+    }
+
+    if ($file['size'] > 5 * 1024 * 1024) {
+        throw new RuntimeException("Image must not exceed 5MB.");
+    }
+
+    $imageInfo = getimagesize($file['tmp_name']);
+
+    if ($imageInfo === false) {
+        throw new RuntimeException("Please upload a valid image.");
+    }
+
+    $allowedTypes = [
+        'image/jpeg' => 'jpg',
+        'image/png'  => 'png',
+        'image/webp' => 'webp'
+    ];
+
+    $mimeType = $imageInfo['mime'];
+
+    if (!isset($allowedTypes[$mimeType])) {
+        throw new RuntimeException(
+            "Only JPG, PNG, and WEBP images are allowed."
+        );
+    }
+
+    $extension = $allowedTypes[$mimeType];
+    $fileName = bin2hex(random_bytes(16)) . '.' . $extension;
+    $destination = $uploadDirectory . $fileName;
+
+    if (!move_uploaded_file($file['tmp_name'], $destination)) {
+        throw new RuntimeException("Unable to save the uploaded image.");
+    }
+
+    return $fileName;
+}
+
+// DELETE CATEGORY IMAGE
+function deleteCategoryImage($imagePath, $uploadDirectory)
+{
+    if (empty($imagePath)) {
+        return;
+    }
+
+    $fileName = basename($imagePath);
+    $fullPath = $uploadDirectory . $fileName;
+
+    if (is_file($fullPath)) {
+        unlink($fullPath);
+    }
+}
+
+// NOTIFICATIONS
 if (isset($_GET['added'])) {
     $message = "Category added successfully!";
 } elseif (isset($_GET['updated'])) {
@@ -41,23 +111,53 @@ if (
     $formName = trim($_POST['category_name'] ?? '');
     $formDescription = trim($_POST['description'] ?? '');
 
+    $newImageFile = null;
+
     if ($formName === '') {
         $message = "Category name is required!";
         $messageType = 'error';
     } else {
         try {
-            $stmt = $conn->prepare(
-                "INSERT INTO categories (category_name, description)
-                 VALUES (?, ?)"
+            $newImageFile = uploadCategoryImage(
+                $_FILES['category_image'] ?? null,
+                $uploadDirectory
             );
 
-            $stmt->execute([$formName, $formDescription]);
+            if ($newImageFile === null) {
+                throw new RuntimeException(
+                    "Please select a category image."
+                );
+            }
+
+            $imagePath = $uploadDatabasePath . $newImageFile;
+
+            $stmt = $conn->prepare(
+                "INSERT INTO categories
+                    (category_name, description, category_image)
+                 VALUES (?, ?, ?)"
+            );
+
+            $stmt->execute([
+                $formName,
+                $formDescription,
+                $imagePath
+            ]);
 
             header("Location: categories.php?added=1");
             exit;
 
-        } catch (PDOException $e) {
-            $message = "Unable to add category. It may already exist.";
+        } catch (Throwable $e) {
+            if ($newImageFile !== null) {
+                deleteCategoryImage(
+                    $newImageFile,
+                    $uploadDirectory
+                );
+            }
+
+            $message = $e instanceof RuntimeException
+                ? $e->getMessage()
+                : "Unable to add category. It may already exist.";
+
             $messageType = 'error';
         }
     }
@@ -72,25 +172,88 @@ if (
     $formName = trim($_POST['category_name'] ?? '');
     $formDescription = trim($_POST['description'] ?? '');
 
+    $newImageFile = null;
+
     if ($id <= 0 || $formName === '') {
         $message = "Invalid category information!";
         $messageType = 'error';
     } else {
         try {
-            $stmt = $conn->prepare(
-                "UPDATE categories
-                 SET category_name = ?,
-                     description = ?
+            // GET CURRENT IMAGE
+            $currentStmt = $conn->prepare(
+                "SELECT category_image
+                 FROM categories
                  WHERE category_id = ?"
             );
 
-            $stmt->execute([$formName, $formDescription, $id]);
+            $currentStmt->execute([$id]);
+            $currentCategory = $currentStmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$currentCategory) {
+                throw new RuntimeException("Category not found.");
+            }
+
+            // IMAGE IS OPTIONAL WHEN EDITING
+            $newImageFile = uploadCategoryImage(
+                $_FILES['category_image'] ?? null,
+                $uploadDirectory
+            );
+
+            if ($newImageFile !== null) {
+                $newImagePath = $uploadDatabasePath . $newImageFile;
+
+                $stmt = $conn->prepare(
+                    "UPDATE categories
+                     SET category_name = ?,
+                         description = ?,
+                         category_image = ?
+                     WHERE category_id = ?"
+                );
+
+                $stmt->execute([
+                    $formName,
+                    $formDescription,
+                    $newImagePath,
+                    $id
+                ]);
+
+                // DELETE OLD IMAGE AFTER SUCCESSFUL UPDATE
+                deleteCategoryImage(
+                    $currentCategory['category_image'],
+                    $uploadDirectory
+                );
+
+            } else {
+                // KEEP EXISTING IMAGE
+                $stmt = $conn->prepare(
+                    "UPDATE categories
+                     SET category_name = ?,
+                         description = ?
+                     WHERE category_id = ?"
+                );
+
+                $stmt->execute([
+                    $formName,
+                    $formDescription,
+                    $id
+                ]);
+            }
 
             header("Location: categories.php?updated=1");
             exit;
 
-        } catch (PDOException $e) {
-            $message = "Unable to update category.";
+        } catch (Throwable $e) {
+            if ($newImageFile !== null) {
+                deleteCategoryImage(
+                    $newImageFile,
+                    $uploadDirectory
+                );
+            }
+
+            $message = $e instanceof RuntimeException
+                ? $e->getMessage()
+                : "Unable to update category.";
+
             $messageType = 'error';
         }
     }
@@ -105,11 +268,13 @@ if (
 
     try {
         if ($id <= 0) {
-            throw new Exception("Invalid category.");
+            throw new RuntimeException("Invalid category.");
         }
 
         $check = $conn->prepare(
-            "SELECT COUNT(*) FROM products WHERE category_id = ?"
+            "SELECT COUNT(*)
+             FROM products
+             WHERE category_id = ?"
         );
 
         $check->execute([$id]);
@@ -118,18 +283,39 @@ if (
             $message = "Cannot delete: This category is assigned to products.";
             $messageType = 'error';
         } else {
+            // GET IMAGE BEFORE DELETING CATEGORY
+            $imageStmt = $conn->prepare(
+                "SELECT category_image
+                 FROM categories
+                 WHERE category_id = ?"
+            );
+
+            $imageStmt->execute([$id]);
+            $categoryToDelete = $imageStmt->fetch(PDO::FETCH_ASSOC);
+
             $stmt = $conn->prepare(
-                "DELETE FROM categories WHERE category_id = ?"
+                "DELETE FROM categories
+                 WHERE category_id = ?"
             );
 
             $stmt->execute([$id]);
+
+            if ($categoryToDelete) {
+                deleteCategoryImage(
+                    $categoryToDelete['category_image'],
+                    $uploadDirectory
+                );
+            }
 
             header("Location: categories.php?deleted=1");
             exit;
         }
 
-    } catch (Exception $e) {
-        $message = "Unable to delete category.";
+    } catch (Throwable $e) {
+        $message = $e instanceof RuntimeException
+            ? $e->getMessage()
+            : "Unable to delete category.";
+
         $messageType = 'error';
     }
 }
@@ -141,7 +327,9 @@ if (isset($_GET['edit'])) {
     $id = (int)$_GET['edit'];
 
     $stmt = $conn->prepare(
-        "SELECT * FROM categories WHERE category_id = ?"
+        "SELECT *
+         FROM categories
+         WHERE category_id = ?"
     );
 
     $stmt->execute([$id]);
@@ -153,7 +341,7 @@ if (isset($_GET['edit'])) {
     }
 }
 
-// PRESERVE FORM VALUES WHEN VALIDATION FAILS
+// PRESERVE FORM VALUES WHEN UPDATE FAILS
 if (
     $_SERVER['REQUEST_METHOD'] === 'POST' &&
     ($_POST['action'] ?? '') === 'update' &&
@@ -162,14 +350,16 @@ if (
     $editId = (int)$_POST['category_id'];
 
     $stmt = $conn->prepare(
-        "SELECT * FROM categories WHERE category_id = ?"
+        "SELECT *
+         FROM categories
+         WHERE category_id = ?"
     );
 
     $stmt->execute([$editId]);
     $editCategory = $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
-// GET ALL CATEGORIES WITH PRODUCT COUNTS
+// GET ALL CATEGORIES
 $stmt = $conn->query(
     "SELECT
         c.*,
@@ -198,6 +388,9 @@ foreach ($categories as $category) {
         $emptyCategories++;
     }
 }
+
+// DEFAULT IMAGE
+$defaultImage = 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=500';
 ?>
 
 <!DOCTYPE html>
@@ -240,9 +433,7 @@ body {
     color: var(--text);
 }
 
-/* =================================
-   SIDEBAR - EXACT INVENTORY DESIGN
-================================= */
+/* SIDEBAR */
 
 .sidebar {
     position: fixed;
@@ -250,13 +441,10 @@ body {
     left: 0;
     bottom: 0;
     z-index: 1000;
-
     display: flex;
     flex-direction: column;
-
     width: var(--sidebar-width);
     padding: 28px 25px 20px;
-
     color: white;
     background: var(--brown-dark);
     overflow-y: auto;
@@ -311,13 +499,10 @@ body {
     gap: 17px;
     min-height: 57px;
     padding: 12px 17px;
-
     color: #fff;
     text-decoration: none;
-
     border-radius: 14px;
     border-left: 4px solid transparent;
-
     font-size: 15px;
     font-weight: 600;
     transition: .2s ease;
@@ -353,12 +538,10 @@ body {
     gap: 16px;
     min-height: 57px;
     padding: 12px 18px;
-
     color: #fff;
     background: #a13f30;
     border-radius: 13px;
     text-decoration: none;
-
     font-size: 15px;
     font-weight: 700;
     transition: .2s ease;
@@ -368,9 +551,7 @@ body {
     background: #8e3428;
 }
 
-/* =================================
-   MAIN CONTENT
-================================= */
+/* MAIN */
 
 .main {
     min-height: 100vh;
@@ -458,7 +639,6 @@ body {
     padding: 27px 30px;
     margin-bottom: 25px;
     overflow: hidden;
-
     color: white;
     background: linear-gradient(115deg, #59391f, #805633);
     border-radius: 15px;
@@ -481,7 +661,7 @@ body {
     opacity: .9;
 }
 
-/* SECTION HEADING */
+/* SECTION */
 
 .section-heading {
     display: flex;
@@ -502,7 +682,7 @@ body {
     font-size: 11px;
 }
 
-/* STAT CARDS */
+/* STATISTICS */
 
 .stats-grid {
     display: grid;
@@ -551,7 +731,6 @@ body {
     color: var(--brown);
     font-size: 25px;
     font-weight: 800;
-    overflow-wrap: anywhere;
 }
 
 .stat-note {
@@ -662,6 +841,58 @@ textarea {
     resize: vertical;
 }
 
+/* IMAGE UPLOAD */
+
+.image-upload-box {
+    padding: 15px;
+    background: #faf8f5;
+    border: 1px dashed #cbb8a5;
+    border-radius: 10px;
+}
+
+.image-upload-box input[type="file"] {
+    padding: 10px;
+    background: white;
+    cursor: pointer;
+}
+
+.image-help {
+    margin: 8px 0 0;
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.image-preview-wrapper {
+    margin-top: 13px;
+}
+
+.image-preview {
+    display: block;
+    width: 190px;
+    height: 135px;
+    object-fit: cover;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: #eee5dc;
+}
+
+.preview-label {
+    display: block;
+    margin-bottom: 7px;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.current-image-note {
+    margin-top: 8px;
+    color: #34734a;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+/* FORM BUTTONS */
+
 .form-actions {
     display: flex;
     align-items: center;
@@ -670,20 +901,16 @@ textarea {
     margin-top: 18px;
 }
 
-/* BUTTONS */
-
 .btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 7px;
     padding: 11px 17px;
-
     border: none;
     border-radius: 8px;
     text-decoration: none;
     cursor: pointer;
-
     font-family: inherit;
     font-size: 12px;
     font-weight: 700;
@@ -741,6 +968,121 @@ textarea {
     font-weight: 700;
 }
 
+/* CATEGORY GALLERY */
+
+.category-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 18px;
+}
+
+.category-card {
+    min-width: 0;
+    overflow: hidden;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 13px;
+    box-shadow: 0 3px 12px rgba(55,35,18,.04);
+    transition: .2s ease;
+}
+
+.category-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 20px rgba(55,35,18,.10);
+}
+
+.category-image {
+    position: relative;
+    height: 165px;
+    overflow: hidden;
+    background: #eee5dc;
+}
+
+.category-image img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform .35s ease;
+    cursor: zoom-in;
+}
+
+.category-card:hover .category-image img {
+    transform: scale(1.06);
+}
+
+.category-image-label {
+    position: absolute;
+    left: 12px;
+    bottom: 12px;
+    padding: 6px 11px;
+    color: white;
+    background: rgba(66,41,24,.82);
+    border-radius: 20px;
+    font-size: 10px;
+    font-weight: 700;
+    pointer-events: none;
+}
+
+.category-card-body {
+    padding: 15px;
+}
+
+.category-card-title {
+    margin: 0;
+    color: var(--brown);
+    font-size: 15px;
+    font-weight: 800;
+    overflow-wrap: anywhere;
+}
+
+.category-card-description {
+    min-height: 35px;
+    margin: 8px 0 12px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
+.category-card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 11px;
+    border-top: 1px solid var(--border);
+}
+
+.category-product-count {
+    padding: 6px 9px;
+    color: var(--brown);
+    background: #f2e7db;
+    border-radius: 20px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.category-empty-count {
+    color: #9a672d;
+    background: #fff0db;
+}
+
+.category-card-actions {
+    display: flex;
+    gap: 5px;
+}
+
+.category-card-actions form {
+    margin: 0;
+}
+
+.category-card-actions .btn {
+    padding: 7px 9px;
+    font-size: 10px;
+}
+
 /* TABLE */
 
 .table-wrapper {
@@ -781,6 +1123,14 @@ td {
 .category-id {
     color: var(--muted);
     font-weight: 600;
+}
+
+.table-category-image {
+    width: 55px;
+    height: 45px;
+    object-fit: cover;
+    border-radius: 7px;
+    background: #eee5dc;
 }
 
 .product-count {
@@ -827,6 +1177,85 @@ td {
     text-align: center;
 }
 
+/* IMAGE ZOOM MODAL */
+
+.image-zoom-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    align-items: center;
+    justify-content: center;
+    padding: 25px;
+    background: rgba(25, 17, 12, 0.88);
+    backdrop-filter: blur(5px);
+}
+
+.image-zoom-modal.active {
+    display: flex;
+}
+
+.zoom-content {
+    position: relative;
+    width: 100%;
+    max-width: 750px;
+    text-align: center;
+    animation: zoomIn .25s ease;
+}
+
+.zoom-content img {
+    display: block;
+    max-width: 100%;
+    max-height: 75vh;
+    margin: auto;
+    object-fit: contain;
+    border-radius: 13px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.35);
+}
+
+.zoom-title {
+    margin-top: 15px;
+    color: white;
+    font-family: 'Playfair Display', serif;
+    font-size: 22px;
+}
+
+.zoom-close {
+    position: absolute;
+    top: -18px;
+    right: -18px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    color: white;
+    background: #9c4938;
+    border: none;
+    border-radius: 50%;
+    font-size: 23px;
+    cursor: pointer;
+    transition: .2s;
+}
+
+.zoom-close:hover {
+    background: #c45b45;
+    transform: rotate(90deg);
+}
+
+@keyframes zoomIn {
+    from {
+        opacity: 0;
+        transform: scale(.85);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
 /* FOOTER */
 
 .footer {
@@ -838,12 +1267,9 @@ td {
     text-align: center;
 }
 
-/* =================================
-   RESPONSIVE - SAME AS INVENTORY
-================================= */
+/* RESPONSIVE */
 
 @media (max-width: 1100px) {
-
     :root {
         --sidebar-width: 225px;
     }
@@ -856,10 +1282,13 @@ td {
     .main {
         padding: 24px;
     }
+
+    .category-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 @media (max-width: 800px) {
-
     :root {
         --sidebar-width: 190px;
     }
@@ -904,17 +1333,12 @@ td {
         padding: 16px;
     }
 
-    .stat-value {
-        font-size: 27px;
-    }
-
     .panel {
         padding: 18px;
     }
 }
 
 @media (max-width: 620px) {
-
     .sidebar {
         position: relative;
         width: 100%;
@@ -994,10 +1418,6 @@ td {
         padding: 17px;
     }
 
-    .stat-value {
-        font-size: 28px;
-    }
-
     .panel {
         padding: 14px;
     }
@@ -1014,10 +1434,26 @@ td {
         align-items: flex-start;
         flex-direction: column;
     }
+
+    .category-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .category-image {
+        height: 190px;
+    }
+
+    .zoom-close {
+        top: -15px;
+        right: -8px;
+    }
+
+    .zoom-title {
+        font-size: 19px;
+    }
 }
 
 @media (max-width: 360px) {
-
     .nav-menu {
         grid-template-columns: 1fr;
     }
@@ -1032,19 +1468,17 @@ td {
 
 <body>
 
-<!-- SIDEBAR - SAME AS INVENTORY -->
+<!-- SIDEBAR -->
 
 <aside class="sidebar">
 
     <div class="brand">
-
         <span class="brand-icon">🥐</span>
 
         <div>
             <h2 class="brand-name">Bakery System</h2>
             <p class="brand-subtitle">SALES & INVENTORY</p>
         </div>
-
     </div>
 
     <p class="menu-label">MAIN MENU</p>
@@ -1079,7 +1513,6 @@ td {
         </a>
 
         <?php if ($isAdmin): ?>
-
             <a href="reports.php" class="nav-link">
                 <span class="nav-icon">📊</span>
                 Reports
@@ -1089,18 +1522,15 @@ td {
                 <span class="nav-icon">👥</span>
                 User Management
             </a>
-
         <?php endif; ?>
 
     </nav>
 
     <div class="sidebar-bottom">
-
         <a href="../logout.php" class="logout-link">
             <span class="nav-icon">↪</span>
             Logout
         </a>
-
     </div>
 
 </aside>
@@ -1116,13 +1546,8 @@ td {
     <header class="topbar">
 
         <div class="page-title">
-
             <h1>Category Management</h1>
-
-            <p>
-                Organize and manage your bakery product categories.
-            </p>
-
+            <p>Organize and manage your bakery product categories.</p>
         </div>
 
         <div class="user-info">
@@ -1132,7 +1557,6 @@ td {
             </div>
 
             <div class="user-details">
-
                 <strong><?= $name ?></strong>
 
                 <span>
@@ -1140,7 +1564,6 @@ td {
                         <?= $isAdmin ? 'ADMINISTRATOR' : 'STAFF' ?>
                     </span>
                 </span>
-
             </div>
 
         </div>
@@ -1152,7 +1575,6 @@ td {
     <section class="welcome-banner">
 
         <div>
-
             <h2>Category Management 🧁</h2>
 
             <p>
@@ -1161,7 +1583,6 @@ td {
                 <br>
                 <?= date('l, F d, Y') ?>
             </p>
-
         </div>
 
         <div class="banner-icon">🥐</div>
@@ -1186,11 +1607,8 @@ td {
     <!-- CATEGORY OVERVIEW -->
 
     <div class="section-heading">
-
         <h2>Category Overview</h2>
-
         <span>Summary of your bakery categories</span>
-
     </div>
 
     <section class="stats-grid">
@@ -1274,8 +1692,8 @@ td {
 
                 <p>
                     <?= $editCategory
-                        ? 'Modify the information of your selected category.'
-                        : 'Enter the category details to organize your bakery products.' ?>
+                        ? 'Modify the information and image of your selected category.'
+                        : 'Enter category details and upload a category image.' ?>
                 </p>
 
             </div>
@@ -1286,7 +1704,9 @@ td {
 
         <?php if ($editCategory): ?>
 
-            <form method="POST">
+            <!-- EDIT CATEGORY FORM -->
+
+            <form method="POST" enctype="multipart/form-data">
 
                 <input type="hidden" name="action" value="update">
 
@@ -1339,6 +1759,51 @@ td {
 
                     </div>
 
+                    <div class="form-group full">
+
+                        <label for="category_image">Category Image</label>
+
+                        <div class="image-upload-box">
+
+                            <input
+                                type="file"
+                                id="category_image"
+                                name="category_image"
+                                accept="image/jpeg,image/png,image/webp"
+                            >
+
+                            <p class="image-help">
+                                Upload JPG, PNG, or WEBP. Maximum file size: 5MB.
+                                Leave blank to keep the current image.
+                            </p>
+
+                            <div class="image-preview-wrapper">
+
+                                <span class="preview-label">
+                                    CURRENT / NEW IMAGE PREVIEW
+                                </span>
+
+                                <img
+                                    src="<?= !empty($editCategory['category_image'])
+                                        ? '../' . htmlspecialchars($editCategory['category_image'], ENT_QUOTES, 'UTF-8')
+                                        : $defaultImage ?>"
+                                    alt="Category image preview"
+                                    class="image-preview"
+                                    id="imagePreview"
+                                >
+
+                                <?php if (!empty($editCategory['category_image'])): ?>
+                                    <div class="current-image-note">
+                                        ✓ Current category image
+                                    </div>
+                                <?php endif; ?>
+
+                            </div>
+
+                        </div>
+
+                    </div>
+
                 </div>
 
                 <div class="form-actions">
@@ -1357,7 +1822,9 @@ td {
 
         <?php else: ?>
 
-            <form method="POST">
+            <!-- ADD CATEGORY FORM -->
+
+            <form method="POST" enctype="multipart/form-data">
 
                 <input type="hidden" name="action" value="add">
 
@@ -1400,6 +1867,46 @@ td {
 
                     </div>
 
+                    <div class="form-group full">
+
+                        <label for="category_image">
+                            Category Image <span style="color:#b83232;">*</span>
+                        </label>
+
+                        <div class="image-upload-box">
+
+                            <input
+                                type="file"
+                                id="category_image"
+                                name="category_image"
+                                accept="image/jpeg,image/png,image/webp"
+                                required
+                            >
+
+                            <p class="image-help">
+                                Choose an image from your computer.
+                                JPG, PNG, or WEBP only. Maximum 5MB.
+                            </p>
+
+                            <div class="image-preview-wrapper">
+
+                                <span class="preview-label">
+                                    IMAGE PREVIEW
+                                </span>
+
+                                <img
+                                    src="<?= $defaultImage ?>"
+                                    alt="Category image preview"
+                                    class="image-preview"
+                                    id="imagePreview"
+                                >
+
+                            </div>
+
+                        </div>
+
+                    </div>
+
                 </div>
 
                 <div class="form-actions">
@@ -1416,12 +1923,159 @@ td {
 
     </section>
 
-    <!-- CATEGORY LIST -->
+    <!-- CATEGORY GALLERY -->
+
+    <div class="section-heading">
+
+        <h2>Category Gallery</h2>
+        <span>Double-click an image to zoom</span>
+
+    </div>
+
+    <section class="panel">
+
+        <div class="panel-header">
+
+            <div>
+                <h2>Bakery Categories</h2>
+                <p>Double-click any category image to view it in a larger preview.</p>
+            </div>
+
+            <span class="category-count">
+                🧁 <?= number_format($totalCategories) ?> Categories
+            </span>
+
+        </div>
+
+        <?php if ($categories): ?>
+
+            <div class="category-grid">
+
+                <?php foreach ($categories as $category): ?>
+
+                    <?php
+                        $categoryImage = !empty($category['category_image'])
+                            ? '../' . $category['category_image']
+                            : $defaultImage;
+
+                        $productCount = (int)$category['product_count'];
+                    ?>
+
+                    <article class="category-card">
+
+                        <div class="category-image">
+
+                            <img
+                                src="<?= htmlspecialchars(
+                                    $categoryImage,
+                                    ENT_QUOTES,
+                                    'UTF-8'
+                                ) ?>"
+                                alt="<?= htmlspecialchars(
+                                    $category['category_name'],
+                                    ENT_QUOTES,
+                                    'UTF-8'
+                                ) ?>"
+                                loading="lazy"
+                                onerror="this.onerror=null;this.src='<?= htmlspecialchars($defaultImage, ENT_QUOTES, 'UTF-8') ?>';"
+                            >
+
+                            <span class="category-image-label">
+                                #<?= (int)$category['category_id'] ?>
+                            </span>
+
+                        </div>
+
+                        <div class="category-card-body">
+
+                            <h3 class="category-card-title">
+                                <?= htmlspecialchars(
+                                    $category['category_name'],
+                                    ENT_QUOTES,
+                                    'UTF-8'
+                                ) ?>
+                            </h3>
+
+                            <p class="category-card-description">
+                                <?= htmlspecialchars(
+                                    $category['description'] ?: 'No description available.',
+                                    ENT_QUOTES,
+                                    'UTF-8'
+                                ) ?>
+                            </p>
+
+                            <div class="category-card-footer">
+
+                                <span class="category-product-count <?= $productCount === 0
+                                    ? 'category-empty-count'
+                                    : '' ?>">
+
+                                    📦 <?= number_format($productCount) ?>
+                                    <?= $productCount === 1
+                                        ? 'Product'
+                                        : 'Products' ?>
+
+                                </span>
+
+                                <div class="category-card-actions">
+
+                                    <a
+                                        class="btn edit-btn"
+                                        href="categories.php?edit=<?= (int)$category['category_id'] ?>"
+                                    >
+                                        ✎ Edit
+                                    </a>
+
+                                    <form
+                                        method="POST"
+                                        onsubmit="return confirm('Are you sure you want to delete this category?');"
+                                    >
+
+                                        <input
+                                            type="hidden"
+                                            name="action"
+                                            value="delete"
+                                        >
+
+                                        <input
+                                            type="hidden"
+                                            name="category_id"
+                                            value="<?= (int)$category['category_id'] ?>"
+                                        >
+
+                                        <button type="submit" class="btn delete-btn">
+                                            🗑 Delete
+                                        </button>
+
+                                    </form>
+
+                                </div>
+
+                            </div>
+
+                        </div>
+
+                    </article>
+
+                <?php endforeach; ?>
+
+            </div>
+
+        <?php else: ?>
+
+            <div class="empty">
+                No categories found. Add your first category above.
+            </div>
+
+        <?php endif; ?>
+
+    </section>
+
+    <!-- CATEGORY TABLE -->
 
     <div class="section-heading">
 
         <h2>Category List</h2>
-
         <span>Manage your registered categories</span>
 
     </div>
@@ -1431,13 +2085,8 @@ td {
         <div class="panel-header">
 
             <div>
-
                 <h2>Registered Categories</h2>
-
-                <p>
-                    View, edit, and manage your bakery categories.
-                </p>
-
+                <p>View, edit, and manage your bakery categories.</p>
             </div>
 
             <span class="category-count">
@@ -1451,15 +2100,14 @@ td {
             <table>
 
                 <thead>
-
                     <tr>
                         <th>ID</th>
+                        <th>Image</th>
                         <th>Category Name</th>
                         <th>Description</th>
                         <th>Products</th>
                         <th>Actions</th>
                     </tr>
-
                 </thead>
 
                 <tbody>
@@ -1468,10 +2116,30 @@ td {
 
                     <?php foreach ($categories as $category): ?>
 
+                        <?php
+                            $tableImage = !empty($category['category_image'])
+                                ? '../' . $category['category_image']
+                                : $defaultImage;
+                        ?>
+
                         <tr>
 
                             <td class="category-id">
                                 #<?= (int)$category['category_id'] ?>
+                            </td>
+
+                            <td>
+                                <img
+                                    src="<?= htmlspecialchars(
+                                        $tableImage,
+                                        ENT_QUOTES,
+                                        'UTF-8'
+                                    ) ?>"
+                                    alt="Category"
+                                    class="table-category-image"
+                                    loading="lazy"
+                                    onerror="this.onerror=null;this.src='<?= htmlspecialchars($defaultImage, ENT_QUOTES, 'UTF-8') ?>';"
+                                >
                             </td>
 
                             <td class="category-name">
@@ -1491,7 +2159,6 @@ td {
                             </td>
 
                             <td>
-
                                 <span class="product-count <?= (int)$category['product_count'] === 0
                                     ? 'no-products'
                                     : '' ?>">
@@ -1503,7 +2170,6 @@ td {
                                         : 'Products' ?>
 
                                 </span>
-
                             </td>
 
                             <td>
@@ -1551,7 +2217,7 @@ td {
                 <?php else: ?>
 
                     <tr>
-                        <td colspan="5" class="empty">
+                        <td colspan="6" class="empty">
                             No categories found. Add your first category above.
                         </td>
                     </tr>
@@ -1569,24 +2235,52 @@ td {
     <!-- FOOTER -->
 
     <footer class="footer">
-
         Bakery Sales and Stock Monitoring System
         &copy; <?= date('Y') ?>. All rights reserved.
-
     </footer>
 
 </div>
 </main>
 
+<!-- CATEGORY IMAGE ZOOM MODAL -->
+
+<div
+    class="image-zoom-modal"
+    id="imageZoomModal"
+    aria-hidden="true"
+>
+
+    <div class="zoom-content">
+
+        <button
+            type="button"
+            class="zoom-close"
+            id="zoomClose"
+            aria-label="Close image preview"
+        >
+            &times;
+        </button>
+
+        <img
+            src=""
+            alt="Category Preview"
+            id="zoomImage"
+        >
+
+        <h2 class="zoom-title" id="zoomTitle"></h2>
+
+    </div>
+
+</div>
+
 <script>
 
 // AUTO-HIDE NOTIFICATION
+
 const message = document.getElementById("categoryMessage");
 
 if (message) {
-
     setTimeout(() => {
-
         message.style.opacity = "0";
 
         setTimeout(() => {
@@ -1594,8 +2288,119 @@ if (message) {
         }, 500);
 
     }, 3000);
+}
+
+// IMAGE LIVE PREVIEW
+
+const imageInput = document.getElementById("category_image");
+const imagePreview = document.getElementById("imagePreview");
+
+if (imageInput && imagePreview) {
+
+    imageInput.addEventListener("change", function() {
+
+        const file = this.files[0];
+
+        if (!file) {
+            return;
+        }
+
+        const allowedTypes = [
+            "image/jpeg",
+            "image/png",
+            "image/webp"
+        ];
+
+        if (!allowedTypes.includes(file.type)) {
+            alert("Please select a JPG, PNG, or WEBP image.");
+            this.value = "";
+            return;
+        }
+
+        if (file.size > 5 * 1024 * 1024) {
+            alert("Image must not exceed 5MB.");
+            this.value = "";
+            return;
+        }
+
+        const imageURL = URL.createObjectURL(file);
+        imagePreview.src = imageURL;
+
+    });
 
 }
+
+// CATEGORY IMAGE DOUBLE-CLICK ZOOM
+
+const zoomModal = document.getElementById("imageZoomModal");
+const zoomImage = document.getElementById("zoomImage");
+const zoomTitle = document.getElementById("zoomTitle");
+const zoomClose = document.getElementById("zoomClose");
+
+// SELECT CATEGORY GALLERY IMAGES ONLY
+
+document.querySelectorAll(".category-image img").forEach(image => {
+
+    image.addEventListener("dblclick", function() {
+
+        const categoryCard = this.closest(".category-card");
+
+        if (!categoryCard) {
+            return;
+        }
+
+        const categoryName = categoryCard.querySelector(
+            ".category-card-title"
+        ).textContent.trim();
+
+        zoomImage.src = this.src;
+        zoomImage.alt = categoryName;
+        zoomTitle.textContent = categoryName;
+
+        zoomModal.classList.add("active");
+        zoomModal.setAttribute("aria-hidden", "false");
+
+    });
+
+});
+
+// CLOSE MODAL FUNCTION
+
+function closeImageZoom() {
+
+    zoomModal.classList.remove("active");
+    zoomModal.setAttribute("aria-hidden", "true");
+
+    zoomImage.src = "";
+
+}
+
+// CLOSE USING X BUTTON
+
+zoomClose.addEventListener("click", closeImageZoom);
+
+// CLOSE WHEN CLICKING OUTSIDE IMAGE
+
+zoomModal.addEventListener("click", function(event) {
+
+    if (event.target === zoomModal) {
+        closeImageZoom();
+    }
+
+});
+
+// CLOSE USING ESC KEY
+
+document.addEventListener("keydown", function(event) {
+
+    if (
+        event.key === "Escape" &&
+        zoomModal.classList.contains("active")
+    ) {
+        closeImageZoom();
+    }
+
+});
 
 </script>
 
