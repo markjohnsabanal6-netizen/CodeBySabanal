@@ -1,4 +1,3 @@
-
 <?php
     // Use Windows Pacific Time
     date_default_timezone_set('America/Los_Angeles');

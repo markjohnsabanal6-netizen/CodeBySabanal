@@ -34,6 +34,26 @@ $name = htmlspecialchars(
 $role = $_SESSION['role'] ?? 'staff';
 $isAdmin = ($role === 'admin');
 
+// FETCH LOGGED-IN USER PROFILE PICTURE
+$userId = (int) $_SESSION['user_id'];
+
+$profileStmt = $conn->prepare("
+    SELECT profile_picture
+    FROM users
+    WHERE user_id = :user_id
+    LIMIT 1
+");
+$profileStmt->execute(['user_id' => $userId]);
+$profilePicture = $profileStmt->fetchColumn();
+
+$profileImage = !empty($profilePicture)
+    ? '../' . $profilePicture
+    : '';
+
+$profileInitial = strtoupper(
+    substr($_SESSION['full_name'] ?? 'U', 0, 1)
+);
+
 // Dashboard statistics.
 $totalProducts = (int) $conn->query("
     SELECT COUNT(*) FROM products
@@ -373,6 +393,82 @@ body {
     color: var(--brown);
     font-size: 17px;
     font-weight: 800;
+    overflow: hidden;
+}
+
+.user-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.user-info {
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+}
+
+.user-info:hover .user-details strong {
+    color: var(--brown);
+}
+
+.sidebar-profile-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 10px;
+    margin-bottom: 12px;
+    color: #fff;
+    text-decoration: none;
+    border-radius: 12px;
+    transition: .2s ease;
+}
+
+.sidebar-profile-link:hover {
+    background: rgba(255,255,255,.10);
+}
+
+.sidebar-profile-avatar {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: #e9d8c5;
+    color: var(--brown);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 800;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.sidebar-profile-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.sidebar-profile-details {
+    min-width: 0;
+}
+
+.sidebar-profile-details strong {
+    display: block;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sidebar-profile-details span {
+    display: block;
+    margin-top: 3px;
+    color: #d3b69c;
+    font-size: 10px;
+    text-transform: capitalize;
 }
 
 .user-details strong {
@@ -1043,6 +1139,26 @@ td.amount {
 
     <div class="sidebar-bottom">
 
+        <a href="profile.php" class="sidebar-profile-link" title="My Profile">
+
+            <div class="sidebar-profile-avatar">
+                <?php if (!empty($profileImage)): ?>
+                    <img
+                        src="<?= htmlspecialchars($profileImage, ENT_QUOTES, 'UTF-8') ?>"
+                        alt="Profile picture"
+                    >
+                <?php else: ?>
+                    <?= htmlspecialchars($profileInitial, ENT_QUOTES, 'UTF-8') ?>
+                <?php endif; ?>
+            </div>
+
+            <div class="sidebar-profile-details">
+                <strong><?= $name ?></strong>
+                <span><?= htmlspecialchars($role, ENT_QUOTES, 'UTF-8') ?> · My Profile</span>
+            </div>
+
+        </a>
+
         <a href="../logout.php" class="logout-link">
             <span class="nav-icon">↪</span>
             Logout
@@ -1067,10 +1183,17 @@ td.amount {
             <p>Here's what's happening in your bakery today.</p>
         </div>
 
-        <div class="user-info">
+        <a href="profile.php" class="user-info" title="My Profile">
 
             <div class="user-avatar">
-                <?= strtoupper(substr($name, 0, 1)) ?>
+                <?php if (!empty($profileImage)): ?>
+                    <img
+                        src="<?= htmlspecialchars($profileImage, ENT_QUOTES, 'UTF-8') ?>"
+                        alt="Profile picture"
+                    >
+                <?php else: ?>
+                    <?= htmlspecialchars($profileInitial, ENT_QUOTES, 'UTF-8') ?>
+                <?php endif; ?>
             </div>
 
             <div class="user-details">
@@ -1085,7 +1208,7 @@ td.amount {
 
             </div>
 
-        </div>
+        </a>
 
     </header>
 

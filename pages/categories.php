@@ -16,6 +16,30 @@ $name = htmlspecialchars(
     'UTF-8'
 );
 
+// GET LOGGED-IN USER PROFILE PICTURE
+$userId = (int) $_SESSION['user_id'];
+$profilePicture = null;
+
+$userStmt = $conn->prepare(
+    "SELECT profile_picture
+     FROM users
+     WHERE user_id = ?"
+);
+$userStmt->execute([$userId]);
+$userProfile = $userStmt->fetch(PDO::FETCH_ASSOC);
+
+if (!empty($userProfile['profile_picture'])) {
+    $profileFilename = basename($userProfile['profile_picture']);
+    $profileFilePath = __DIR__ . '/../uploads/profiles/' . $profileFilename;
+
+    if (
+        strpos($userProfile['profile_picture'], 'uploads/profiles/') === 0
+        && is_file($profileFilePath)
+    ) {
+        $profilePicture = '../uploads/profiles/' . rawurlencode($profileFilename);
+    }
+}
+
 $role = $_SESSION['role'] ?? 'staff';
 $isAdmin = ($role === 'admin');
 
@@ -606,6 +630,15 @@ body {
     color: var(--brown);
     font-size: 17px;
     font-weight: 800;
+    overflow: hidden;
+}
+
+.user-avatar img {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: cover;
+    border-radius: 50%;
 }
 
 .user-details strong {
@@ -1553,7 +1586,14 @@ td {
         <div class="user-info">
 
             <div class="user-avatar">
-                <?= strtoupper(substr($name, 0, 1)) ?>
+                <?php if ($profilePicture): ?>
+                    <img
+                        src="<?= htmlspecialchars($profilePicture, ENT_QUOTES, 'UTF-8') ?>"
+                        alt="Profile picture"
+                    >
+                <?php else: ?>
+                    <?= strtoupper(substr($_SESSION['full_name'] ?? 'U', 0, 1)) ?>
+                <?php endif; ?>
             </div>
 
             <div class="user-details">

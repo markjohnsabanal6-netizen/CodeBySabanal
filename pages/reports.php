@@ -20,6 +20,8 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 // USER INFORMATION
+$userId = (int) $_SESSION['user_id'];
+
 $rawName = $_SESSION['full_name'] ?? 'User';
 $name = htmlspecialchars($rawName, ENT_QUOTES, 'UTF-8');
 $initial = strtoupper(substr($rawName, 0, 1));
@@ -31,6 +33,28 @@ $isAdmin = ($role === 'admin');
 if (!$isAdmin) {
     header("Location: dashboard.php");
     exit;
+}
+
+// PROFILE PICTURE
+$stmt = $conn->prepare("
+    SELECT profile_picture
+    FROM users
+    WHERE user_id = :user_id
+    LIMIT 1
+");
+
+$stmt->execute([
+    'user_id' => $userId
+]);
+
+$userProfile = $stmt->fetch(PDO::FETCH_ASSOC);
+
+$profilePicture = $userProfile['profile_picture'] ?? '';
+
+$profilePicturePath = '';
+
+if (!empty($profilePicture)) {
+    $profilePicturePath = '../' . ltrim($profilePicture, '/');
 }
 
 // DATE FILTER
@@ -136,7 +160,7 @@ $max_daily_sales = 0;
 foreach ($daily_sales as $day) {
     $max_daily_sales = max(
         $max_daily_sales,
-        (float)$day['daily_sales']
+        (float) $day['daily_sales']
     );
 }
 
@@ -144,9 +168,29 @@ foreach ($daily_sales as $day) {
 $inventory_summary = $conn->query("
     SELECT
         COUNT(*) AS total_stock_items,
-        COALESCE(SUM(CASE WHEN quantity > minimum_stock THEN 1 ELSE 0 END), 0) AS in_stock,
-        COALESCE(SUM(CASE WHEN quantity > 0 AND quantity <= minimum_stock THEN 1 ELSE 0 END), 0) AS low_stock,
-        COALESCE(SUM(CASE WHEN quantity <= 0 THEN 1 ELSE 0 END), 0) AS out_of_stock
+        COALESCE(SUM(
+            CASE
+                WHEN quantity > minimum_stock THEN 1
+                ELSE 0
+            END
+        ), 0) AS in_stock,
+
+        COALESCE(SUM(
+            CASE
+                WHEN quantity > 0
+                 AND quantity <= minimum_stock
+                THEN 1
+                ELSE 0
+            END
+        ), 0) AS low_stock,
+
+        COALESCE(SUM(
+            CASE
+                WHEN quantity <= 0 THEN 1
+                ELSE 0
+            END
+        ), 0) AS out_of_stock
+
     FROM inventory
 ")->fetch(PDO::FETCH_ASSOC);
 
@@ -162,7 +206,8 @@ $inventory_details = $conn->query("
             ELSE 'In Stock'
         END AS stock_status
     FROM inventory i
-    INNER JOIN products p ON i.product_id = p.product_id
+    INNER JOIN products p
+        ON i.product_id = p.product_id
     ORDER BY p.product_name ASC
 ")->fetchAll(PDO::FETCH_ASSOC);
 
@@ -176,7 +221,8 @@ $stmt = $conn->prepare("
         s.payment_amount,
         s.change_amount
     FROM sales s
-    INNER JOIN users u ON s.user_id = u.user_id
+    INNER JOIN users u
+        ON s.user_id = u.user_id
     WHERE s.sale_date >= :start_date
       AND s.sale_date < DATE_ADD(:end_date, INTERVAL 1 DAY)
     ORDER BY s.sale_date DESC
@@ -191,7 +237,11 @@ $sales_records = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // SAFE OUTPUT
 function e($value) {
-    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+    return htmlspecialchars(
+        (string) $value,
+        ENT_QUOTES,
+        'UTF-8'
+    );
 }
 ?>
 
@@ -199,33 +249,44 @@ function e($value) {
 <html lang="en">
 
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8">
 
-<title>Reports | Bakery Management System</title>
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
 
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <title>Reports | Bakery Management System</title>
 
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link
+        rel="preconnect"
+        href="https://fonts.gstatic.com"
+        crossorigin
+    >
+
+    <link
+        href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap"
+        rel="stylesheet"
+    >
 
 <style>
-
 :root {
     --brown-dark: #54351f;
     --brown-deep: #422918;
     --brown: #805735;
     --brown-light: #a77b55;
 
-    --cream: #f7f4ef;
-    --text: #34271f;
-    --muted: #88796e;
-    --border: #eee5dc;
+    --cream: #f8f6f3;
+    --text: #33271f;
+    --muted: #8b8178;
+    --border: #e8e1da;
     --white: #ffffff;
 
     --green: #27834c;
     --red: #c64b43;
     --orange: #c58a35;
+    --purple: #7660a8;
 
     --sidebar-width: 260px;
 }
@@ -246,9 +307,7 @@ a {
     text-decoration: none;
 }
 
-/* =================================
-   SIDEBAR - MATCH DASHBOARD
-================================= */
+/* SIDEBAR */
 
 .sidebar {
     position: fixed;
@@ -265,6 +324,7 @@ a {
 
     color: white;
     background: var(--brown-dark);
+
     overflow-y: auto;
 }
 
@@ -272,6 +332,7 @@ a {
     display: flex;
     align-items: center;
     gap: 13px;
+
     padding: 10px 8px 0;
     margin-bottom: 65px;
 }
@@ -283,7 +344,8 @@ a {
 
 .brand-name {
     margin: 0;
-    color: #fff;
+
+    color: white;
     font-family: 'Playfair Display', Georgia, serif;
     font-size: 23px;
     line-height: 1.15;
@@ -291,6 +353,7 @@ a {
 
 .brand-subtitle {
     margin: 5px 0 0;
+
     color: #e7cbb3;
     font-size: 11px;
     font-weight: 600;
@@ -299,6 +362,7 @@ a {
 
 .menu-label {
     margin: 0 0 17px 17px;
+
     color: #d3b69c;
     font-size: 12px;
     font-weight: 800;
@@ -315,26 +379,27 @@ a {
     display: flex;
     align-items: center;
     gap: 17px;
+
     min-height: 57px;
     padding: 12px 17px;
 
-    color: #fff;
-    text-decoration: none;
+    color: white;
 
     border-radius: 14px;
     border-left: 4px solid transparent;
 
     font-size: 15px;
     font-weight: 600;
+
     transition: .2s ease;
 }
 
 .nav-link:hover {
-    background: rgba(255,255,255,.10);
+    background: rgba(255, 255, 255, .10);
 }
 
 .nav-link.active {
-    color: #fff;
+    color: white;
     background: #805735;
     border-left-color: #f0c99d;
 }
@@ -343,31 +408,35 @@ a {
     display: inline-flex;
     justify-content: center;
     align-items: center;
+
     width: 22px;
     flex-shrink: 0;
+
     font-size: 19px;
 }
 
 .sidebar-bottom {
     margin-top: auto;
     padding-top: 22px;
-    border-top: 1px solid rgba(255,255,255,.17);
+
+    border-top: 1px solid rgba(255, 255, 255, .17);
 }
 
 .logout-link {
     display: flex;
     align-items: center;
     gap: 16px;
+
     min-height: 57px;
     padding: 12px 18px;
 
-    color: #fff;
+    color: white;
     background: #a13f30;
     border-radius: 13px;
-    text-decoration: none;
 
     font-size: 15px;
     font-weight: 700;
+
     transition: .2s ease;
 }
 
@@ -375,9 +444,7 @@ a {
     background: #8e3428;
 }
 
-/* =================================
-   MAIN CONTENT
-================================= */
+/* MAIN CONTENT */
 
 .main {
     min-height: 100vh;
@@ -398,19 +465,22 @@ a {
     justify-content: space-between;
     align-items: center;
     flex-wrap: wrap;
+
     gap: 15px;
     margin-bottom: 28px;
 }
 
 .page-title h1 {
     margin: 0;
+
     color: var(--brown-deep);
     font-family: 'Playfair Display', Georgia, serif;
     font-size: 29px;
 }
 
 .page-title p {
-    margin-top: 5px;
+    margin: 6px 0 0;
+
     color: var(--muted);
     font-size: 13px;
 }
@@ -425,13 +495,25 @@ a {
     display: flex;
     justify-content: center;
     align-items: center;
+
     width: 43px;
     height: 43px;
+    flex-shrink: 0;
+
+    overflow: hidden;
+
     border-radius: 50%;
     background: #e9d8c5;
     color: var(--brown);
+
     font-size: 17px;
     font-weight: 800;
+}
+
+.user-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .user-details strong {
@@ -442,15 +524,18 @@ a {
 .user-details span {
     display: inline-block;
     margin-top: 3px;
+
     color: var(--muted);
     font-size: 11px;
 }
 
 .role-badge {
     padding: 5px 9px;
+
     border-radius: 20px;
     background: #eee3d5;
     color: var(--brown);
+
     font-size: 10px;
     font-weight: 700;
 }
@@ -459,11 +544,13 @@ a {
 
 .welcome-banner {
     display: flex;
-    align-items: center;
     justify-content: space-between;
+    align-items: center;
+
     gap: 15px;
     padding: 27px 30px;
     margin-bottom: 25px;
+
     overflow: hidden;
 
     color: white;
@@ -473,12 +560,14 @@ a {
 
 .welcome-banner h2 {
     margin: 0 0 7px;
+
     font-family: 'Playfair Display', serif;
     font-size: 23px;
 }
 
 .welcome-banner p {
     margin: 0;
+
     color: #e6d7c8;
     font-size: 12px;
     line-height: 1.7;
@@ -495,14 +584,17 @@ a {
     display: flex;
     justify-content: space-between;
     align-items: center;
+
     gap: 10px;
     margin: 27px 0 15px;
 }
 
 .section-heading h2 {
     margin: 0;
+
     color: var(--brown);
     font-size: 16px;
+    font-weight: 800;
 }
 
 .section-heading span {
@@ -516,10 +608,12 @@ a {
     min-width: 0;
     padding: 21px;
     margin-bottom: 20px;
+
     background: white;
     border: 1px solid var(--border);
     border-radius: 13px;
-    box-shadow: 0 3px 12px rgba(55,35,18,.035);
+
+    box-shadow: 0 3px 12px rgba(55, 35, 18, .035);
 }
 
 .card-header {
@@ -527,14 +621,17 @@ a {
     justify-content: space-between;
     align-items: center;
     flex-wrap: wrap;
+
     gap: 10px;
     margin-bottom: 20px;
 }
 
 .card-header h2 {
     margin: 0;
+
     color: var(--brown);
     font-size: 14px;
+    font-weight: 800;
 }
 
 .card-header span {
@@ -556,9 +653,11 @@ a {
 
 .section-tag {
     padding: 7px 11px;
+
     color: var(--brown);
     background: #f7f0e9;
     border-radius: 20px;
+
     font-size: 10px;
     font-weight: 800;
 }
@@ -602,25 +701,25 @@ input[type="date"] {
 input[type="date"]:focus {
     outline: none;
     border-color: var(--brown-light);
-    box-shadow: 0 0 0 3px rgba(128,87,53,.10);
+    box-shadow: 0 0 0 3px rgba(128, 87, 53, .10);
 }
 
 /* BUTTONS */
 
 .btn {
-    min-height: 43px;
-
     display: inline-flex;
     justify-content: center;
     align-items: center;
     gap: 7px;
 
+    min-height: 43px;
     padding: 10px 15px;
 
     border: none;
     border-radius: 9px;
 
     color: white;
+
     font-family: 'DM Sans', sans-serif;
     font-size: 11px;
     font-weight: 800;
@@ -662,16 +761,24 @@ input[type="date"]:focus {
 .summary-card {
     min-width: 0;
     padding: 20px;
+
     background: white;
     border: 1px solid var(--border);
     border-radius: 13px;
-    box-shadow: 0 3px 12px rgba(55,35,18,.035);
+
+    box-shadow: 0 3px 12px rgba(55, 35, 18, .035);
+    transition: .2s ease;
+}
+
+.summary-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 7px 18px rgba(55, 35, 18, .07);
 }
 
 .summary-top {
     display: flex;
-    align-items: center;
     justify-content: space-between;
+    align-items: center;
     gap: 8px;
 }
 
@@ -683,29 +790,45 @@ input[type="date"]:focus {
 
 .summary-icon {
     display: flex;
-    align-items: center;
     justify-content: center;
+    align-items: center;
+
     width: 36px;
     height: 36px;
+
     border-radius: 10px;
     font-size: 17px;
 }
 
-.accent-brown { background: #f2e7db; }
-.accent-green { background: #e3f2e8; }
-.accent-orange { background: #fff0db; }
-.accent-purple { background: #eee9f8; }
+.accent-brown {
+    background: #f2e7db;
+}
+
+.accent-green {
+    background: #e3f2e8;
+}
+
+.accent-orange {
+    background: #fff0db;
+}
+
+.accent-purple {
+    background: #eee9f8;
+}
 
 .summary-value {
     margin-top: 15px;
+
     color: var(--brown);
     font-size: 25px;
     font-weight: 800;
+
     overflow-wrap: anywhere;
 }
 
 .summary-caption {
     margin-top: 5px;
+
     color: var(--muted);
     font-size: 10px;
 }
@@ -716,6 +839,7 @@ input[type="date"]:focus {
     display: grid;
     grid-template-columns: 1.5fr 1fr;
     gap: 18px;
+
     margin-top: 25px;
 }
 
@@ -746,7 +870,9 @@ input[type="date"]:focus {
 
 .chart-track {
     height: 11px;
+
     overflow: hidden;
+
     background: #f1ece6;
     border-radius: 20px;
 }
@@ -754,6 +880,7 @@ input[type="date"]:focus {
 .chart-bar {
     height: 100%;
     min-width: 0;
+
     background: linear-gradient(90deg, #805735, #bd936e);
     border-radius: 20px;
 }
@@ -768,6 +895,7 @@ input[type="date"]:focus {
 .chart-empty,
 .best-empty {
     padding: 28px 10px;
+
     color: var(--muted);
     font-size: 12px;
     text-align: center;
@@ -791,12 +919,15 @@ input[type="date"]:focus {
     display: flex;
     justify-content: center;
     align-items: center;
+
     width: 31px;
     height: 31px;
     flex-shrink: 0;
+
     color: var(--brown);
     background: #f4ece4;
     border-radius: 9px;
+
     font-size: 11px;
     font-weight: 800;
 }
@@ -808,9 +939,11 @@ input[type="date"]:focus {
 
 .best-name {
     margin-bottom: 5px;
+
     color: #4b3b30;
     font-size: 11px;
     font-weight: 800;
+
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -831,10 +964,12 @@ input[type="date"]:focus {
 .note {
     margin-top: 15px;
     padding: 12px 14px;
+
     color: #83766b;
     background: #faf7f3;
     border-left: 3px solid #b58b66;
     border-radius: 7px;
+
     font-size: 10px;
     line-height: 1.7;
 }
@@ -855,14 +990,17 @@ table {
 th,
 td {
     padding: 13px 12px;
+
     text-align: left;
     border-bottom: 1px solid var(--border);
+
     font-size: 11px;
 }
 
 th {
     color: var(--muted);
     background: #faf8f5;
+
     font-weight: 700;
     white-space: nowrap;
 }
@@ -897,7 +1035,9 @@ tbody tr:hover {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+
     padding: 6px 10px;
+
     border-radius: 20px;
     font-size: 10px;
     font-weight: 800;
@@ -905,8 +1045,10 @@ tbody tr:hover {
 
 .status::before {
     content: "";
+
     width: 6px;
     height: 6px;
+
     background: currentColor;
     border-radius: 50%;
 }
@@ -932,11 +1074,13 @@ tbody tr:hover {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 12px;
+
     margin-bottom: 22px;
 }
 
 .inventory-stat {
     padding: 16px;
+
     background: #fbf9f6;
     border: 1px solid #f0e9e1;
     border-radius: 11px;
@@ -945,13 +1089,14 @@ tbody tr:hover {
 .inventory-stat span {
     display: block;
     margin-bottom: 8px;
+
     color: var(--muted);
     font-size: 10px;
     font-weight: 700;
 }
 
 .inventory-stat strong {
-    color: var(--brown-dark);
+    color: var(--brown-deep);
     font-size: 21px;
     font-weight: 800;
 }
@@ -963,13 +1108,16 @@ tbody tr:hover {
     justify-content: space-between;
     align-items: center;
     flex-wrap: wrap;
+
     gap: 10px;
     padding: 17px 20px;
     margin-top: 20px;
+
     color: var(--muted);
     background: white;
     border: 1px solid var(--border);
     border-radius: 12px;
+
     font-size: 11px;
 }
 
@@ -980,15 +1128,15 @@ tbody tr:hover {
 .footer {
     margin-top: 30px;
     padding: 15px 0;
+
     color: var(--muted);
     border-top: 1px solid var(--border);
+
     font-size: 10px;
     text-align: center;
 }
 
-/* =================================
-   RESPONSIVE - SAME AS DASHBOARD
-================================= */
+/* RESPONSIVE */
 
 @media (max-width: 1100px) {
     :root {
@@ -1070,8 +1218,10 @@ tbody tr:hover {
 @media (max-width: 620px) {
     .sidebar {
         position: relative;
+
         width: 100%;
         height: auto;
+
         padding: 16px;
     }
 
@@ -1093,6 +1243,7 @@ tbody tr:hover {
         min-height: 43px;
         gap: 7px;
         padding: 8px;
+
         font-size: 11px;
         border-radius: 9px;
     }
@@ -1235,7 +1386,9 @@ tbody tr:hover {
     .welcome-banner {
         padding: 15px;
         margin-bottom: 15px;
+
         background: #54351f !important;
+
         print-color-adjust: exact;
         -webkit-print-color-adjust: exact;
     }
@@ -1277,7 +1430,6 @@ tbody tr:hover {
         -webkit-print-color-adjust: exact;
     }
 }
-
 </style>
 </head>
 
@@ -1329,7 +1481,11 @@ tbody tr:hover {
 
         <?php if ($isAdmin): ?>
 
-            <a href="reports.php" class="nav-link active" aria-current="page">
+            <a
+                href="reports.php"
+                class="nav-link active"
+                aria-current="page"
+            >
                 <span class="nav-icon">📊</span>
                 Reports
             </a>
@@ -1366,13 +1522,29 @@ tbody tr:hover {
 
         <div class="page-title">
             <h1>Reports & Analytics</h1>
-            <p>Review your bakery sales performance and inventory records.</p>
+
+            <p>
+                Review your bakery sales performance and inventory records.
+            </p>
         </div>
 
         <div class="user-info">
 
             <div class="user-avatar">
-                <?= e($initial) ?>
+
+                <?php if (!empty($profilePicturePath)): ?>
+
+                    <img
+                        src="<?= e($profilePicturePath) ?>"
+                        alt="Profile picture"
+                    >
+
+                <?php else: ?>
+
+                    <?= e($initial) ?>
+
+                <?php endif; ?>
+
             </div>
 
             <div class="user-details">
@@ -1418,7 +1590,10 @@ tbody tr:hover {
 
             <div>
                 <h2>Report Filters</h2>
-                <span>Select a date range to generate your sales report.</span>
+
+                <span>
+                    Select a date range to generate your sales report.
+                </span>
             </div>
 
             <span class="section-tag">DATE RANGE</span>
@@ -1428,6 +1603,7 @@ tbody tr:hover {
         <form method="GET" class="filter-form">
 
             <div class="filter-group">
+
                 <label for="start_date">Start Date</label>
 
                 <input
@@ -1438,9 +1614,11 @@ tbody tr:hover {
                     max="<?= date('Y-m-d') ?>"
                     required
                 >
+
             </div>
 
             <div class="filter-group">
+
                 <label for="end_date">End Date</label>
 
                 <input
@@ -1451,6 +1629,7 @@ tbody tr:hover {
                     max="<?= date('Y-m-d') ?>"
                     required
                 >
+
             </div>
 
             <button type="submit" class="btn filter-btn">
@@ -1486,70 +1665,101 @@ tbody tr:hover {
     <!-- SALES OVERVIEW -->
 
     <div class="section-heading">
+
         <h2>Sales Overview</h2>
+
         <span>Based on selected report period</span>
+
     </div>
 
     <section class="summary-grid">
 
+        <!-- TOTAL SALES -->
+
         <div class="summary-card">
+
             <div class="summary-top">
+
                 <span class="summary-label">Total Sales</span>
+
                 <span class="summary-icon accent-green">₱</span>
+
             </div>
 
             <div class="summary-value">
-                ₱<?= number_format((float)$sales_summary['total_sales'], 2) ?>
+                ₱<?= number_format((float) $sales_summary['total_sales'], 2) ?>
             </div>
 
             <div class="summary-caption">
                 Revenue for selected period
             </div>
+
         </div>
 
+        <!-- TRANSACTIONS -->
+
         <div class="summary-card">
+
             <div class="summary-top">
+
                 <span class="summary-label">Total Transactions</span>
+
                 <span class="summary-icon accent-brown">🧾</span>
+
             </div>
 
             <div class="summary-value">
-                <?= number_format((int)$sales_summary['total_transactions']) ?>
+                <?= number_format((int) $sales_summary['total_transactions']) ?>
             </div>
 
             <div class="summary-caption">
                 Completed sales transactions
             </div>
+
         </div>
 
+        <!-- ITEMS SOLD -->
+
         <div class="summary-card">
+
             <div class="summary-top">
+
                 <span class="summary-label">Items Sold</span>
+
                 <span class="summary-icon accent-orange">🛍️</span>
+
             </div>
 
             <div class="summary-value">
-                <?= number_format((int)$total_items_sold) ?>
+                <?= number_format((int) $total_items_sold) ?>
             </div>
 
             <div class="summary-caption">
                 Total quantity sold
             </div>
+
         </div>
 
+        <!-- TOTAL PRODUCTS -->
+
         <div class="summary-card">
+
             <div class="summary-top">
+
                 <span class="summary-label">Total Products</span>
+
                 <span class="summary-icon accent-purple">🍞</span>
+
             </div>
 
             <div class="summary-value">
-                <?= number_format((int)$total_products) ?>
+                <?= number_format((int) $total_products) ?>
             </div>
 
             <div class="summary-caption">
                 Registered bakery products
             </div>
+
         </div>
 
     </section>
@@ -1557,8 +1767,11 @@ tbody tr:hover {
     <!-- SALES ANALYTICS -->
 
     <div class="section-heading">
+
         <h2>Sales Analytics</h2>
+
         <span>Daily performance and top-selling products</span>
+
     </div>
 
     <section class="analytics-grid">
@@ -1568,8 +1781,11 @@ tbody tr:hover {
         <div class="card">
 
             <div class="card-header">
+
                 <h2>Daily Sales Performance</h2>
+
                 <span>Sales chart</span>
+
             </div>
 
             <div class="chart-list">
@@ -1580,7 +1796,10 @@ tbody tr:hover {
 
                         <?php
                         $percentage = $max_daily_sales > 0
-                            ? ((float)$day['daily_sales'] / $max_daily_sales) * 100
+                            ? (
+                                (float) $day['daily_sales']
+                                / $max_daily_sales
+                            ) * 100
                             : 0;
                         ?>
 
@@ -1591,14 +1810,16 @@ tbody tr:hover {
                             </span>
 
                             <div class="chart-track">
+
                                 <div
                                     class="chart-bar"
                                     style="width: <?= number_format($percentage, 2, '.', '') ?>%;"
                                 ></div>
+
                             </div>
 
                             <span class="chart-amount">
-                                ₱<?= number_format((float)$day['daily_sales'], 2) ?>
+                                ₱<?= number_format((float) $day['daily_sales'], 2) ?>
                             </span>
 
                         </div>
@@ -1627,8 +1848,11 @@ tbody tr:hover {
         <div class="card">
 
             <div class="card-header">
+
                 <h2>Top Selling Products</h2>
+
                 <span>Top 5 products</span>
+
             </div>
 
             <div class="best-list">
@@ -1650,13 +1874,14 @@ tbody tr:hover {
                                 </div>
 
                                 <div class="best-meta">
-                                    <?= number_format((int)$product['total_quantity']) ?> items sold
+                                    <?= number_format((int) $product['total_quantity']) ?>
+                                    items sold
                                 </div>
 
                             </div>
 
                             <div class="best-revenue">
-                                ₱<?= number_format((float)$product['total_revenue'], 2) ?>
+                                ₱<?= number_format((float) $product['total_revenue'], 2) ?>
                             </div>
 
                         </div>
@@ -1680,15 +1905,21 @@ tbody tr:hover {
     <!-- DAILY SALES SUMMARY -->
 
     <div class="section-heading">
+
         <h2>Daily Sales Summary</h2>
+
         <span>Detailed daily transaction records</span>
+
     </div>
 
     <section class="card">
 
         <div class="card-header">
+
             <h2>Daily Sales Records</h2>
+
             <span>Daily totals</span>
+
         </div>
 
         <div class="table-wrap">
@@ -1696,11 +1927,13 @@ tbody tr:hover {
             <table>
 
                 <thead>
+
                     <tr>
                         <th>Date</th>
                         <th>Transactions</th>
                         <th>Total Sales</th>
                     </tr>
+
                 </thead>
 
                 <tbody>
@@ -1710,17 +1943,19 @@ tbody tr:hover {
                     <?php foreach ($daily_sales as $day): ?>
 
                         <tr>
+
                             <td>
                                 <?= e(date('F d, Y', strtotime($day['sale_day']))) ?>
                             </td>
 
                             <td>
-                                <?= number_format((int)$day['transactions']) ?>
+                                <?= number_format((int) $day['transactions']) ?>
                             </td>
 
                             <td class="amount-cell">
-                                ₱<?= number_format((float)$day['daily_sales'], 2) ?>
+                                ₱<?= number_format((float) $day['daily_sales'], 2) ?>
                             </td>
+
                         </tr>
 
                     <?php endforeach; ?>
@@ -1728,9 +1963,11 @@ tbody tr:hover {
                 <?php else: ?>
 
                     <tr>
+
                         <td colspan="3" class="empty">
                             No daily sales records found.
                         </td>
+
                     </tr>
 
                 <?php endif; ?>
@@ -1746,45 +1983,63 @@ tbody tr:hover {
     <!-- INVENTORY OVERVIEW -->
 
     <div class="section-heading">
+
         <h2>Inventory Overview</h2>
+
         <span>Current stock monitoring</span>
+
     </div>
 
     <section class="card">
 
         <div class="card-header">
+
             <h2>Current Inventory Status</h2>
+
             <span>Live inventory</span>
+
         </div>
 
         <div class="inventory-summary">
 
             <div class="inventory-stat">
+
                 <span>Total Inventory Items</span>
+
                 <strong>
-                    <?= number_format((int)$inventory_summary['total_stock_items']) ?>
+                    <?= number_format((int) $inventory_summary['total_stock_items']) ?>
                 </strong>
+
             </div>
 
             <div class="inventory-stat">
+
                 <span>In Stock</span>
-                <strong style="color:#27834c;">
-                    <?= number_format((int)$inventory_summary['in_stock']) ?>
+
+                <strong style="color: #27834c;">
+                    <?= number_format((int) $inventory_summary['in_stock']) ?>
                 </strong>
+
             </div>
 
             <div class="inventory-stat">
+
                 <span>Low Stock</span>
-                <strong style="color:#c58a35;">
-                    <?= number_format((int)$inventory_summary['low_stock']) ?>
+
+                <strong style="color: #c58a35;">
+                    <?= number_format((int) $inventory_summary['low_stock']) ?>
                 </strong>
+
             </div>
 
             <div class="inventory-stat">
+
                 <span>Out of Stock</span>
-                <strong style="color:#c64b43;">
-                    <?= number_format((int)$inventory_summary['out_of_stock']) ?>
+
+                <strong style="color: #c64b43;">
+                    <?= number_format((int) $inventory_summary['out_of_stock']) ?>
                 </strong>
+
             </div>
 
         </div>
@@ -1794,12 +2049,14 @@ tbody tr:hover {
             <table>
 
                 <thead>
+
                     <tr>
                         <th>Product Name</th>
                         <th>Current Stock</th>
                         <th>Minimum Stock</th>
                         <th>Stock Status</th>
                     </tr>
+
                 </thead>
 
                 <tbody>
@@ -1820,20 +2077,24 @@ tbody tr:hover {
 
                         <tr>
 
-                            <td><?= e($item['product_name']) ?></td>
-
                             <td>
-                                <?= number_format((int)$item['quantity']) ?>
+                                <?= e($item['product_name']) ?>
                             </td>
 
                             <td>
-                                <?= number_format((int)$item['minimum_stock']) ?>
+                                <?= number_format((int) $item['quantity']) ?>
                             </td>
 
                             <td>
-                                <span class="status <?= $status_class ?>">
+                                <?= number_format((int) $item['minimum_stock']) ?>
+                            </td>
+
+                            <td>
+
+                                <span class="status <?= e($status_class) ?>">
                                     <?= e($item['stock_status']) ?>
                                 </span>
+
                             </td>
 
                         </tr>
@@ -1843,9 +2104,11 @@ tbody tr:hover {
                 <?php else: ?>
 
                     <tr>
+
                         <td colspan="4" class="empty">
                             No inventory records found.
                         </td>
+
                     </tr>
 
                 <?php endif; ?>
@@ -1866,15 +2129,23 @@ tbody tr:hover {
     <!-- SALES TRANSACTION RECORDS -->
 
     <div class="section-heading">
+
         <h2>Sales Transactions</h2>
+
         <span>Individual sales and payment details</span>
+
     </div>
 
     <section class="card">
 
         <div class="card-header">
+
             <h2>Sales Transaction Records</h2>
-            <span><?= number_format(count($sales_records)) ?> records</span>
+
+            <span>
+                <?= number_format(count($sales_records)) ?> records
+            </span>
+
         </div>
 
         <div class="table-wrap">
@@ -1882,6 +2153,7 @@ tbody tr:hover {
             <table>
 
                 <thead>
+
                     <tr>
                         <th>Sale ID</th>
                         <th>Date & Time</th>
@@ -1890,6 +2162,7 @@ tbody tr:hover {
                         <th>Payment</th>
                         <th>Change</th>
                     </tr>
+
                 </thead>
 
                 <tbody>
@@ -1901,7 +2174,7 @@ tbody tr:hover {
                         <tr>
 
                             <td class="sale-id">
-                                #<?= (int)$sale['sale_id'] ?>
+                                #<?= (int) $sale['sale_id'] ?>
                             </td>
 
                             <td>
@@ -1913,15 +2186,15 @@ tbody tr:hover {
                             </td>
 
                             <td class="amount-cell">
-                                ₱<?= number_format((float)$sale['total_amount'], 2) ?>
+                                ₱<?= number_format((float) $sale['total_amount'], 2) ?>
                             </td>
 
                             <td>
-                                ₱<?= number_format((float)$sale['payment_amount'], 2) ?>
+                                ₱<?= number_format((float) $sale['payment_amount'], 2) ?>
                             </td>
 
                             <td>
-                                ₱<?= number_format((float)$sale['change_amount'], 2) ?>
+                                ₱<?= number_format((float) $sale['change_amount'], 2) ?>
                             </td>
 
                         </tr>
@@ -1931,9 +2204,11 @@ tbody tr:hover {
                 <?php else: ?>
 
                     <tr>
+
                         <td colspan="6" class="empty">
                             No sales transactions found for this date range.
                         </td>
+
                     </tr>
 
                 <?php endif; ?>
@@ -1951,15 +2226,23 @@ tbody tr:hover {
     <div class="report-period">
 
         <div>
+
             <strong>Report Period:</strong>
+
             <?= e(date('F d, Y', strtotime($start_date))) ?>
+
             to
+
             <?= e(date('F d, Y', strtotime($end_date))) ?>
+
         </div>
 
         <div>
+
             <strong>Generated:</strong>
+
             <?= date('F d, Y | h:i A') ?>
+
         </div>
 
     </div>
@@ -1967,11 +2250,15 @@ tbody tr:hover {
     <!-- FOOTER -->
 
     <footer class="footer">
+
         Bakery Sales and Stock Monitoring System
+
         &copy; <?= date('Y') ?>. All rights reserved.
+
     </footer>
 
 </div>
+
 </main>
 
 </body>

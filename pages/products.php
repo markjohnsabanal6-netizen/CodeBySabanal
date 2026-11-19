@@ -17,6 +17,32 @@ $initial = strtoupper(substr($rawName, 0, 1));
 $role = $_SESSION['role'] ?? 'staff';
 $isAdmin = ($role === 'admin');
 
+// GET THE LOGGED-IN USER'S PROFILE PICTURE
+$profilePictureUrl = null;
+
+$userStmt = $conn->prepare(
+    "SELECT profile_picture
+     FROM users
+     WHERE user_id = ?"
+);
+$userStmt->execute([(int)$_SESSION['user_id']]);
+
+$userProfile = $userStmt->fetch(PDO::FETCH_ASSOC);
+
+if (!empty($userProfile['profile_picture'])) {
+    $storedProfilePicture = $userProfile['profile_picture'];
+
+    // Only allow images stored inside the profile uploads folder.
+    if (strpos($storedProfilePicture, 'uploads/profiles/') === 0) {
+        $profilePictureFilename = basename($storedProfilePicture);
+        $profilePicturePath = __DIR__ . '/../uploads/profiles/' . $profilePictureFilename;
+
+        if (is_file($profilePicturePath)) {
+            $profilePictureUrl = '../uploads/profiles/' . rawurlencode($profilePictureFilename);
+        }
+    }
+}
+
 $message = '';
 $messageType = 'success';
 $editProduct = null;
@@ -742,6 +768,15 @@ body {
     color: var(--brown);
     font-size: 17px;
     font-weight: 800;
+    overflow: hidden;
+}
+
+.user-avatar img {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: cover;
+    border-radius: 50%;
 }
 
 .user-details strong {
@@ -1759,7 +1794,14 @@ td {
 
         <div class="user-info">
             <div class="user-avatar">
-                <?= htmlspecialchars($initial, ENT_QUOTES, 'UTF-8') ?>
+                <?php if ($profilePictureUrl): ?>
+                    <img
+                        src="<?= htmlspecialchars($profilePictureUrl, ENT_QUOTES, 'UTF-8') ?>"
+                        alt="<?= htmlspecialchars($rawName, ENT_QUOTES, 'UTF-8') ?> profile picture"
+                    >
+                <?php else: ?>
+                    <?= htmlspecialchars($initial, ENT_QUOTES, 'UTF-8') ?>
+                <?php endif; ?>
             </div>
 
             <div class="user-details">

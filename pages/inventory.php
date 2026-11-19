@@ -1,4 +1,3 @@
-
 <?php
 
 date_default_timezone_set('America/Los_Angeles');
@@ -27,6 +26,44 @@ $initial = strtoupper(substr($rawName, 0, 1));
 $role = $_SESSION['role'] ?? 'staff';
 $isAdmin = ($role === 'admin');
 $userId = (int)$_SESSION['user_id'];
+
+// GET USER PROFILE PICTURE
+$profilePicture = null;
+
+$userStmt = $conn->prepare("
+    SELECT profile_picture
+    FROM users
+    WHERE user_id = ?
+");
+
+$userStmt->execute([$userId]);
+
+$userProfile = $userStmt->fetch(PDO::FETCH_ASSOC);
+
+if (!empty($userProfile['profile_picture'])) {
+
+    $profileFileName = basename(
+        $userProfile['profile_picture']
+    );
+
+    $profileFilePath = __DIR__ .
+        '/../uploads/profiles/' .
+        $profileFileName;
+
+    if (
+        is_file($profileFilePath) &&
+        strpos(
+            $userProfile['profile_picture'],
+            'uploads/profiles/'
+        ) === 0
+    ) {
+
+        $profilePicture = '../uploads/profiles/' .
+            rawurlencode($profileFileName);
+
+    }
+
+}
 
 $todayLabel = date('l, F d, Y');
 
@@ -110,6 +147,7 @@ if (isset($_GET['stock_in'])) {
 
 // INITIALIZE INVENTORY FOR ACTIVE PRODUCTS
 try {
+
     $initializeInventory = $conn->prepare("
         INSERT IGNORE INTO inventory
             (product_id, quantity, minimum_stock)
@@ -124,8 +162,10 @@ try {
     $initializeInventory->execute();
 
 } catch (PDOException $e) {
+
     $message = "Unable to initialize inventory records.";
     $messageType = 'error';
+
 }
 
 // STOCK IN / STOCK OUT / SET MINIMUM
@@ -137,6 +177,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'stock_in' || $action === 'stock_out') {
 
         $productId = (int)($_POST['product_id'] ?? 0);
+
         $quantity = filter_var(
             $_POST['quantity'] ?? null,
             FILTER_VALIDATE_INT
@@ -201,19 +242,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $currentQuantity = (int)$inventory['quantity'];
 
             if ($action === 'stock_out' && $quantity > $currentQuantity) {
+
                 throw new Exception(
                     "Insufficient stock. Current stock is " .
                     $currentQuantity . "."
                 );
+
             }
 
             // COMPUTE NEW STOCK
             if ($action === 'stock_in') {
+
                 $newQuantity = $currentQuantity + $quantity;
                 $movementType = 'IN';
+
             } else {
+
                 $newQuantity = $currentQuantity - $quantity;
                 $movementType = 'OUT';
+
             }
 
             // UPDATE INVENTORY QUANTITY
@@ -273,7 +320,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
 
             exit;
+
         }
+
     }
 
     // SET MINIMUM STOCK
@@ -334,8 +383,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
 
             exit;
+
         }
+
     }
+
 }
 
 // CATEGORY FILTER
@@ -369,7 +421,6 @@ $totalRegisteredProducts = (int)$conn->query("
 ")->fetchColumn();
 
 // GET INVENTORY PRODUCTS
-// ADDED: c.category_image
 $inventorySql = "
     SELECT
         p.product_id,
@@ -393,8 +444,10 @@ $inventorySql = "
 $inventoryParams = [];
 
 if ($selectedCategory > 0) {
+
     $inventorySql .= " AND p.category_id = :category";
     $inventoryParams['category'] = $selectedCategory;
+
 }
 
 $inventorySql .= " ORDER BY p.product_name ASC";
@@ -474,12 +527,18 @@ $recentMovements = $movementStmt->fetchAll(PDO::FETCH_ASSOC);
 $selectedCategoryName = 'All Products';
 
 if ($selectedCategory > 0) {
+
     foreach ($categoryCounts as $category) {
+
         if ((int)$category['category_id'] === $selectedCategory) {
+
             $selectedCategoryName = $category['category_name'];
             break;
+
         }
+
     }
+
 }
 
 // CATEGORY URL
@@ -700,17 +759,29 @@ body {
     gap: 12px;
 }
 
+/* UPDATED PROFILE AVATAR */
+
 .user-avatar {
     display: flex;
     justify-content: center;
     align-items: center;
     width: 43px;
     height: 43px;
+    min-width: 43px;
+    overflow: hidden;
     border-radius: 50%;
     background: #e9d8c5;
     color: var(--brown);
     font-size: 17px;
     font-weight: 800;
+}
+
+.user-avatar img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
 }
 
 .user-details strong {
@@ -1429,6 +1500,7 @@ td {
 /* RESPONSIVE */
 
 @media (max-width: 1200px) {
+
     .overview-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
@@ -1436,6 +1508,7 @@ td {
     .category-grid {
         grid-template-columns: repeat(3, minmax(0, 1fr));
     }
+
 }
 
 @media (max-width: 1100px) {
@@ -1456,6 +1529,7 @@ td {
     .category-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+
 }
 
 @media (max-width: 800px) {
@@ -1511,6 +1585,7 @@ td {
     .category-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+
 }
 
 @media (max-width: 620px) {
@@ -1615,6 +1690,7 @@ td {
     .stock-actions {
         min-width: 180px;
     }
+
 }
 
 @media (max-width: 360px) {
@@ -1661,13 +1737,19 @@ td {
         </a>
 
         <?php if ($isAdmin): ?>
+
             <a href="categories.php" class="nav-link">
                 <span class="nav-icon">▤</span>
                 Categories
             </a>
+
         <?php endif; ?>
 
-        <a href="inventory.php" class="nav-link active" aria-current="page">
+        <a
+            href="inventory.php"
+            class="nav-link active"
+            aria-current="page"
+        >
             <span class="nav-icon">📦</span>
             Inventory
         </a>
@@ -1721,8 +1803,23 @@ td {
 
         <div class="user-info">
 
+            <!-- UPDATED PROFILE AVATAR -->
+
             <div class="user-avatar">
-                <?= e($initial) ?>
+
+                <?php if ($profilePicture): ?>
+
+                    <img
+                        src="<?= e($profilePicture) ?>"
+                        alt="User Profile"
+                    >
+
+                <?php else: ?>
+
+                    <?= e($initial) ?>
+
+                <?php endif; ?>
+
             </div>
 
             <div class="user-details">
@@ -2088,14 +2185,20 @@ td {
                             $minimum = (int)$product['minimum_stock'];
 
                             if ($quantity <= 0) {
+
                                 $status = 'Out of Stock';
                                 $statusClass = 'status-out';
+
                             } elseif ($quantity <= $minimum) {
+
                                 $status = 'Low Stock';
                                 $statusClass = 'status-low';
+
                             } else {
+
                                 $status = 'In Stock';
                                 $statusClass = 'status-in';
+
                             }
 
                             ?>
@@ -2689,6 +2792,7 @@ function confirmStockOut(form, currentStock) {
     }
 
     if (quantity > currentStock) {
+
         alert(
             "Insufficient stock. Current stock is " +
             currentStock +
@@ -2696,6 +2800,7 @@ function confirmStockOut(form, currentStock) {
         );
 
         return false;
+
     }
 
     if (!remarksChoice) {
