@@ -165,8 +165,8 @@ if (isset($_GET['added'])) {
     $message = "Product added successfully!";
 } elseif (isset($_GET['updated'])) {
     $message = "Product updated successfully!";
-} elseif (isset($_GET['archived'])) {
-    $message = "Product archived successfully! It has been removed from active products, sales, and inventory.";
+} elseif (isset($_GET['status_updated'])) {
+    $message = "Product status updated successfully!";
 }
 
 // ADD PRODUCT
@@ -223,8 +223,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add')
 
                 $stmt = $conn->prepare(
                     "INSERT INTO products
-                    (category_id, product_type, product_name, description, price, product_image)
-                    VALUES (?, ?, ?, ?, ?, ?)"
+                    (category_id, product_type, product_name, description, price, product_image, product_status)
+                    VALUES (?, ?, ?, ?, ?, ?, 'Active')"
                 );
 
                 $stmt->execute([
@@ -368,31 +368,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
     }
 }
 
-// ARCHIVE PRODUCT (SOFT DELETE)
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'archive') {
+// ACTIVATE / DEACTIVATE PRODUCT
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'toggle_status') {
 
     $id = (int)($_POST['product_id'] ?? 0);
+    $newStatus = ($_POST['new_status'] ?? '') === 'Inactive' ? 'Inactive' : 'Active';
 
     try {
         if ($id <= 0) {
             throw new Exception("Invalid product.");
         }
 
-        $archiveStmt = $conn->prepare(
-            "UPDATE products SET is_archived = 1 WHERE product_id = ? AND is_archived = 0"
+        $statusStmt = $conn->prepare(
+            "UPDATE products SET product_status = ? WHERE product_id = ?"
         );
-        $archiveStmt->execute([$id]);
+        $statusStmt->execute([$newStatus, $id]);
 
-        if ($archiveStmt->rowCount() === 0) {
-            throw new Exception("Product not found or already archived.");
+        if ($statusStmt->rowCount() === 0) {
+            $checkStmt = $conn->prepare(
+                "SELECT product_id FROM products WHERE product_id = ?"
+            );
+            $checkStmt->execute([$id]);
+            if (!$checkStmt->fetchColumn()) {
+                throw new Exception("Product not found.");
+            }
         }
 
-        header("Location: products.php?archived=1");
+        header("Location: products.php?status_updated=1");
         exit;
 
     } catch (Exception $e) {
         $message = $e instanceof PDOException
-            ? "Unable to archive product. Please check your database."
+            ? "Unable to update product status. Please check your database."
             : $e->getMessage();
         $messageType = 'error';
     }
@@ -404,7 +411,7 @@ if (isset($_GET['edit'])) {
     $id = (int)$_GET['edit'];
 
     $stmt = $conn->prepare(
-        "SELECT * FROM products WHERE product_id = ? AND is_archived = 0"
+        "SELECT * FROM products WHERE product_id = ?"
     );
     $stmt->execute([$id]);
 
@@ -427,7 +434,7 @@ $categoryCountStmt = $conn->query("
     FROM categories c
     LEFT JOIN products p
         ON c.category_id = p.category_id
-        AND p.is_archived = 0
+        
     GROUP BY
         c.category_id,
         c.category_name,
@@ -439,7 +446,7 @@ $categoryCounts = $categoryCountStmt->fetchAll(PDO::FETCH_ASSOC);
 
 // PRODUCT STATISTICS
 $totalRegisteredProducts = (int)$conn->query(
-    "SELECT COUNT(*) FROM products WHERE is_archived = 0"
+    "SELECT COUNT(*) FROM products"
 )->fetchColumn();
 
 $totalCategories = (int)$conn->query(
@@ -449,14 +456,38 @@ $totalCategories = (int)$conn->query(
 $uncategorizedProducts = (int)$conn->query(
     "SELECT COUNT(*)
      FROM products
-     WHERE is_archived = 0
-       AND (category_id IS NULL
+     WHERE (category_id IS NULL
         OR category_id NOT IN (SELECT category_id FROM categories))"
 )->fetchColumn();
 
 // SEARCH AND CATEGORY FILTER
 $search = trim($_GET['search'] ?? '');
 $selectedCategory = (int)($_GET['category'] ?? 0);
+$statusFilter = $_GET['status'] ?? 'all';
+if (!in_array($statusFilter, ['all', 'Active', 'Inactive'], true)) {
+    $statusFilter = 'all';
+}
+
+// CATEGORY DISPLAY NUMBERING
+// Number products within the selected category using ALL products,
+// including Active and Inactive, regardless of search/status filters.
+$categoryProductNumbers = [];
+
+if ($selectedCategory > 0) {
+    $numberStmt = $conn->prepare(
+        "SELECT product_id
+         FROM products
+         WHERE category_id = ?
+         ORDER BY product_id DESC"
+    );
+    $numberStmt->execute([$selectedCategory]);
+
+    $categoryProductIds = $numberStmt->fetchAll(PDO::FETCH_COLUMN);
+
+    foreach ($categoryProductIds as $index => $productId) {
+        $categoryProductNumbers[(int)$productId] = $index + 1;
+    }
+}
 
 // PRODUCT QUERY
 $sql = "SELECT
@@ -466,9 +497,14 @@ $sql = "SELECT
         FROM products p
         LEFT JOIN categories c
             ON p.category_id = c.category_id
-        WHERE p.is_archived = 0";
+        WHERE 1 = 1";
 
 $params = [];
+
+if ($statusFilter !== 'all') {
+    $sql .= " AND p.product_status = :status";
+    $params['status'] = $statusFilter;
+}
 
 if ($search !== '') {
     $sql .= " AND (
@@ -1265,7 +1301,7 @@ input[type="file"] {
 
 table {
     width: 100%;
-    min-width: 900px;
+    min-width: 980px;
     border-collapse: collapse;
 }
 
@@ -1340,6 +1376,26 @@ td {
     object-fit: cover;
     border-radius: 6px;
     border: 1px solid rgba(84, 53, 31, .12);
+}
+
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 20px;
+    font-size: 9px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.status-active {
+    background: #e3f2e8;
+    color: #34734a;
+}
+
+.status-inactive {
+    background: #fce8e6;
+    color: #a12626;
 }
 
 .product-type-badge {
@@ -2270,7 +2326,7 @@ td {
 
         <!-- SEARCH -->
 
-        <form method="GET" class="search-form" id="productSearchForm">
+        <form method="GET" action="products.php#category-products" class="search-form" id="productSearchForm">
 
             <div class="search-wrap">
 
@@ -2297,6 +2353,12 @@ td {
 
             <?php endif; ?>
 
+            <select name="status" aria-label="Filter product status" style="max-width:150px;">
+                <option value="all" <?= $statusFilter === 'all' ? 'selected' : '' ?>>All Status</option>
+                <option value="Active" <?= $statusFilter === 'Active' ? 'selected' : '' ?>>Active</option>
+                <option value="Inactive" <?= $statusFilter === 'Inactive' ? 'selected' : '' ?>>Inactive</option>
+            </select>
+
             <button type="submit" class="btn primary-btn">
                 🔍 Search
             </button>
@@ -2322,6 +2384,7 @@ td {
                         <th>Product Name</th>
                         <th>Category</th>
                         <th>Product Type</th>
+                        <th>Status</th>
                         <th>Price</th>
                         <th>Description</th>
                         <th>Actions</th>
@@ -2337,7 +2400,9 @@ td {
                             <tr>
 
                                 <td>
-                                    #<?= (int)$product['product_id'] ?>
+                                    #<?= $selectedCategory > 0
+                                        ? ($categoryProductNumbers[(int)$product['product_id']] ?? (int)$product['product_id'])
+                                        : (int)$product['product_id'] ?>
                                 </td>
 
                                 <td>
@@ -2421,6 +2486,12 @@ td {
 
                                 </td>
 
+                                <td>
+                                    <span class="status-badge <?= ($product['product_status'] ?? 'Active') === 'Active' ? 'status-active' : 'status-inactive' ?>">
+                                        <?= htmlspecialchars($product['product_status'] ?? 'Active', ENT_QUOTES, 'UTF-8') ?>
+                                    </span>
+                                </td>
+
                                 <td class="price">
                                     ₱<?= number_format((float)$product['price'], 2) ?>
                                 </td>
@@ -2442,21 +2513,14 @@ td {
 
                                         <form
                                             method="POST"
-                                            onsubmit="return confirm('Archive this product? It will be hidden from active products, sales, and inventory. Existing records will be preserved.');"
+                                            onsubmit="return confirm('<?= ($product['product_status'] ?? 'Active') === 'Active' ? 'Deactivate' : 'Activate' ?> this product?');"
                                         >
-
-                                            <input type="hidden" name="action" value="archive">
-
-                                            <input
-                                                type="hidden"
-                                                name="product_id"
-                                                value="<?= (int)$product['product_id'] ?>"
-                                            >
-
-                                            <button type="submit" class="btn delete-btn">
-                                                📦 Archive
+                                            <input type="hidden" name="action" value="toggle_status">
+                                            <input type="hidden" name="product_id" value="<?= (int)$product['product_id'] ?>">
+                                            <input type="hidden" name="new_status" value="<?= ($product['product_status'] ?? 'Active') === 'Active' ? 'Inactive' : 'Active' ?>">
+                                            <button type="submit" class="btn <?= ($product['product_status'] ?? 'Active') === 'Active' ? 'delete-btn' : 'primary-btn' ?>">
+                                                <?= ($product['product_status'] ?? 'Active') === 'Active' ? '⏸ Deactivate' : '▶ Activate' ?>
                                             </button>
-
                                         </form>
 
                                     </div>
@@ -2470,7 +2534,7 @@ td {
                     <?php else: ?>
 
                         <tr>
-                            <td colspan="7" class="empty">
+                            <td colspan="8" class="empty">
                                 No products found for the selected search or category.
                             </td>
                         </tr>

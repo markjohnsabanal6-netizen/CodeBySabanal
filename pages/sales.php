@@ -111,7 +111,7 @@
                 $productStmt = $conn->prepare("
                     SELECT product_id, product_name, price
                     FROM products
-                    WHERE product_id = ? AND is_archived = 0
+                    WHERE product_id = ? AND product_status = 'Active'
                 ");
 
                 $productStmt->execute([$product_id]);
@@ -293,7 +293,7 @@
             ON p.category_id = c.category_id
         LEFT JOIN inventory i
             ON p.product_id = i.product_id
-        WHERE p.is_archived = 0
+        WHERE p.product_status = 'Active'
         ORDER BY p.product_name ASC
     ");
 
