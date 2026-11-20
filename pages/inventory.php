@@ -420,12 +420,43 @@ $totalRegisteredProducts = (int)$conn->query("
     WHERE is_archived = 0
 ")->fetchColumn();
 
+// KEEP BEVERAGE TYPES SHARED WITH PRODUCTS AND SALES
+$conn->exec("CREATE TABLE IF NOT EXISTS beverage_product_types (
+    type_id INT AUTO_INCREMENT PRIMARY KEY,
+    type_name VARCHAR(100) NOT NULL UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+$defaultBeverageTypes = [
+    'Softdrinks',
+    'Water',
+    'Juice',
+    'Ice Coffee',
+    'Shake',
+    'Coffee',
+    'Milk Tea'
+];
+
+$seedTypeStmt = $conn->prepare(
+    "INSERT IGNORE INTO beverage_product_types (type_name) VALUES (?)"
+);
+
+foreach ($defaultBeverageTypes as $defaultType) {
+    $seedTypeStmt->execute([$defaultType]);
+}
+
+$beverageTypeStmt = $conn->query(
+    "SELECT type_name FROM beverage_product_types ORDER BY type_name ASC"
+);
+$beverageTypes = $beverageTypeStmt->fetchAll(PDO::FETCH_COLUMN);
+
 // GET INVENTORY PRODUCTS
 $inventorySql = "
     SELECT
         p.product_id,
         p.product_name,
         p.product_image,
+        p.product_type,
         p.price,
         p.is_archived,
         c.category_id,
@@ -539,6 +570,30 @@ if ($selectedCategory > 0) {
 
     }
 
+}
+
+// DETECT WHETHER THE SELECTED CATEGORY IS A BEVERAGE CATEGORY
+$isBeverageCategory = (
+    stripos($selectedCategoryName, 'beverage') !== false ||
+    stripos($selectedCategoryName, 'drink') !== false
+);
+
+// COUNT ACTIVE INVENTORY PRODUCTS PER BEVERAGE TYPE
+$beverageTypeCounts = [];
+foreach ($beverageTypes as $typeName) {
+    $beverageTypeCounts[$typeName] = 0;
+}
+
+if ($isBeverageCategory) {
+    foreach ($inventoryProducts as $inventoryProduct) {
+        $typeName = trim((string)($inventoryProduct['product_type'] ?? ''));
+        if ($typeName !== '') {
+            if (!isset($beverageTypeCounts[$typeName])) {
+                $beverageTypeCounts[$typeName] = 0;
+            }
+            $beverageTypeCounts[$typeName]++;
+        }
+    }
 }
 
 // CATEGORY URL
@@ -1156,6 +1211,102 @@ body {
     color: var(--muted);
     font-size: 12px;
 }
+
+/* BEVERAGE TYPE FILTERS */
+.beverage-filter-section {
+    margin: 18px 0 22px;
+    padding: 18px;
+    background: #fffaf5;
+    border: 1px solid #eee1d5;
+    border-radius: 14px;
+}
+
+.beverage-filter-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 13px;
+}
+
+.beverage-filter-heading h3 {
+    margin: 0;
+    color: var(--brown);
+    font-size: 13px;
+}
+
+.beverage-filter-heading span {
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.beverage-filter-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px;
+}
+
+.beverage-filter-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 13px;
+    border: 1px solid #e8d8c8;
+    border-radius: 22px;
+    background: #fff;
+    color: var(--brown);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: .2s ease;
+}
+
+.beverage-filter-btn:hover {
+    border-color: var(--brown-light);
+    background: #f5eadf;
+}
+
+.beverage-filter-btn.active {
+    color: #fff;
+    background: var(--brown-dark);
+    border-color: var(--brown-dark);
+}
+
+.beverage-filter-count {
+    display: inline-flex;
+    min-width: 20px;
+    justify-content: center;
+    padding: 2px 5px;
+    border-radius: 12px;
+    background: rgba(128, 87, 53, .12);
+    font-size: 9px;
+}
+
+.beverage-filter-btn.active .beverage-filter-count {
+    background: rgba(255,255,255,.18);
+}
+
+.inventory-row-hidden {
+    display: none !important;
+}
+
+@media (max-width: 620px) {
+    .beverage-filter-section {
+        padding: 14px;
+    }
+
+    .beverage-filter-grid {
+        gap: 7px;
+    }
+
+    .beverage-filter-btn {
+        padding: 8px 10px;
+        font-size: 10px;
+    }
+}
+
 
 /* BUTTONS */
 
@@ -2131,13 +2282,57 @@ td {
 
         </div>
 
+        <?php if ($isBeverageCategory): ?>
+
+            <!-- BEVERAGE TYPE FILTERS -->
+            <section class="beverage-filter-section" id="beverageTypeFilters">
+
+                <div class="beverage-filter-heading">
+                    <h3>🥤 Beverage Types</h3>
+                    <span>Filter inventory by product type</span>
+                </div>
+
+                <div class="beverage-filter-grid">
+
+                    <button
+                        type="button"
+                        class="beverage-filter-btn active"
+                        data-beverage-filter="all"
+                    >
+                        All Beverages
+                        <span class="beverage-filter-count">
+                            <?= number_format(count($inventoryProducts)) ?>
+                        </span>
+                    </button>
+
+                    <?php foreach ($beverageTypeCounts as $typeName => $typeCount): ?>
+
+                        <button
+                            type="button"
+                            class="beverage-filter-btn"
+                            data-beverage-filter="<?= e($typeName) ?>"
+                        >
+                            <?= e($typeName) ?>
+                            <span class="beverage-filter-count">
+                                <?= number_format((int)$typeCount) ?>
+                            </span>
+                        </button>
+
+                    <?php endforeach; ?>
+
+                </div>
+
+            </section>
+
+        <?php endif; ?>
+
         <!-- INVENTORY TABLE HEADER -->
 
         <div class="panel-header">
 
             <div>
 
-                <h2>
+                <h2 id="inventoryTableHeading">
                     <?= e($selectedCategoryName) ?> Inventory
                 </h2>
 
@@ -2203,7 +2398,10 @@ td {
 
                             ?>
 
-                            <tr>
+                            <tr
+                                class="inventory-product-row"
+                                data-product-type="<?= e(trim((string)($product['product_type'] ?? ''))) ?>"
+                            >
 
                                 <!-- PRODUCT -->
 
@@ -2516,14 +2714,22 @@ td {
 
                         <?php endforeach; ?>
 
-                    <?php else: ?>
+                    <?php endif; ?>
+
+                    <?php if ($isBeverageCategory): ?>
+
+                        <tr id="beverageFilterEmptyRow" style="display:none;">
+                            <td colspan="7" class="empty">
+                                No products found for this beverage type.
+                            </td>
+                        </tr>
+
+                    <?php elseif (!$inventoryProducts): ?>
 
                         <tr>
-
                             <td colspan="7" class="empty">
                                 No inventory products found in this category.
                             </td>
-
                         </tr>
 
                     <?php endif; ?>
@@ -2824,6 +3030,76 @@ function confirmStockOut(form, currentStock) {
 
 }
 
+
+// BEVERAGE TYPE FILTER
+const beverageFilterButtons = document.querySelectorAll(
+    "[data-beverage-filter]"
+);
+const inventoryProductRows = document.querySelectorAll(
+    ".inventory-product-row"
+);
+
+beverageFilterButtons.forEach(function(button) {
+
+    button.addEventListener("click", function() {
+
+        const selectedType = this.dataset.beverageFilter;
+
+        beverageFilterButtons.forEach(function(filterButton) {
+            filterButton.classList.remove("active");
+        });
+
+        this.classList.add("active");
+
+        let visibleCount = 0;
+
+        inventoryProductRows.forEach(function(row) {
+
+            const productType = row.dataset.productType || "";
+            const shouldShow = (
+                selectedType === "all" ||
+                productType.toLowerCase() === selectedType.toLowerCase()
+            );
+
+            row.classList.toggle("inventory-row-hidden", !shouldShow);
+
+            if (shouldShow) {
+                visibleCount++;
+            }
+
+        });
+
+        const productCountBadge = document.querySelector(
+            ".product-count"
+        );
+
+        if (productCountBadge) {
+            productCountBadge.textContent = "📦 " + visibleCount + " Products";
+        }
+
+        const inventoryHeading = document.getElementById(
+            "inventoryTableHeading"
+        );
+
+        if (inventoryHeading) {
+            inventoryHeading.textContent = (
+                selectedType === "all"
+                    ? "<?= e($selectedCategoryName) ?> Inventory"
+                    : selectedType + " Inventory"
+            );
+        }
+
+        const emptyFilterRow = document.getElementById(
+            "beverageFilterEmptyRow"
+        );
+
+        if (emptyFilterRow) {
+            emptyFilterRow.style.display = visibleCount === 0 ? "table-row" : "none";
+        }
+
+    });
+
+});
 
 // CATEGORY FILTER SCROLL POSITION
 

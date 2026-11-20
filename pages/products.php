@@ -47,8 +47,14 @@ $message = '';
 $messageType = 'success';
 $editProduct = null;
 
-// BEVERAGE PRODUCT TYPES
-$beverageTypes = [
+// DATABASE-DRIVEN BEVERAGE PRODUCT TYPES
+$conn->exec("CREATE TABLE IF NOT EXISTS beverage_product_types (
+    type_id INT AUTO_INCREMENT PRIMARY KEY,
+    type_name VARCHAR(100) NOT NULL UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+$defaultBeverageTypes = [
     'Softdrinks',
     'Water',
     'Juice',
@@ -57,6 +63,39 @@ $beverageTypes = [
     'Coffee',
     'Milk Tea'
 ];
+
+$seedTypeStmt = $conn->prepare("INSERT IGNORE INTO beverage_product_types (type_name) VALUES (?)");
+foreach ($defaultBeverageTypes as $defaultType) {
+    $seedTypeStmt->execute([$defaultType]);
+}
+
+$beverageTypeStmt = $conn->query("SELECT type_name FROM beverage_product_types ORDER BY type_name ASC");
+$beverageTypes = $beverageTypeStmt->fetchAll(PDO::FETCH_COLUMN);
+
+// ADD A NEW BEVERAGE TYPE
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_type') {
+    $newType = trim($_POST['new_product_type'] ?? '');
+
+    if ($newType === '' || mb_strlen($newType) > 100) {
+        header('Location: products.php?type_error=invalid');
+        exit;
+    }
+
+    try {
+        $addTypeStmt = $conn->prepare(
+            "INSERT INTO beverage_product_types (type_name) VALUES (?)"
+        );
+        $addTypeStmt->execute([$newType]);
+        header('Location: products.php?type_added=1');
+        exit;
+    } catch (PDOException $e) {
+        if ($e->getCode() === '23000') {
+            header('Location: products.php?type_error=exists');
+            exit;
+        }
+        throw $e;
+    }
+}
 
 // IMAGE UPLOAD SETTINGS
 $uploadDirectory = __DIR__ . '/../uploads/products/';
@@ -187,7 +226,14 @@ function isBeveragesCategory($categoryName)
 }
 
 // NOTIFICATIONS
-if (isset($_GET['added'])) {
+if (isset($_GET['type_added'])) {
+    $message = "Beverage product type added successfully!";
+} elseif (isset($_GET['type_error'])) {
+    $message = $_GET['type_error'] === 'exists'
+        ? "That product type already exists."
+        : "Please enter a product type with 1–100 characters.";
+    $messageType = 'error';
+} elseif (isset($_GET['added'])) {
     $message = "Product added successfully!";
 } elseif (isset($_GET['updated'])) {
     $message = "Product updated successfully!";
@@ -486,12 +532,54 @@ $uncategorizedProducts = (int)$conn->query(
         OR category_id NOT IN (SELECT category_id FROM categories))"
 )->fetchColumn();
 
-// SEARCH AND CATEGORY FILTER
+// SEARCH, CATEGORY, AND BEVERAGE TYPE FILTER
 $search = trim($_GET['search'] ?? '');
 $selectedCategory = (int)($_GET['category'] ?? 0);
+$selectedType = trim($_GET['type'] ?? '');
 $statusFilter = $_GET['status'] ?? 'all';
+
 if (!in_array($statusFilter, ['all', 'Active', 'Inactive'], true)) {
     $statusFilter = 'all';
+}
+
+// Find the Beverages category dynamically by its category name.
+$beveragesCategoryId = 0;
+$beveragesProductCount = 0;
+foreach ($categoryCounts as $categoryRow) {
+    if (strcasecmp(trim($categoryRow['category_name']), 'Beverages') === 0) {
+        $beveragesCategoryId = (int)$categoryRow['category_id'];
+        $beveragesProductCount = (int)$categoryRow['product_count'];
+        break;
+    }
+}
+
+// Only allow a beverage type filter if the Beverages category is selected
+// and the requested type exists in the registered beverage type list.
+if (
+    $selectedCategory !== $beveragesCategoryId ||
+    !in_array($selectedType, $beverageTypes, true)
+) {
+    $selectedType = '';
+}
+
+// Get product counts for each registered beverage type.
+$beverageTypeCounts = [];
+if ($beveragesCategoryId > 0) {
+    $typeCountStmt = $conn->prepare(
+        "SELECT COUNT(*)
+         FROM products
+         WHERE category_id = ?
+           AND product_type = ?"
+    );
+
+    foreach ($beverageTypes as $beverageType) {
+        $typeCountStmt->execute([
+            $beveragesCategoryId,
+            $beverageType
+        ]);
+
+        $beverageTypeCounts[$beverageType] = (int)$typeCountStmt->fetchColumn();
+    }
 }
 
 // CATEGORY DISPLAY NUMBERING
@@ -545,6 +633,11 @@ if ($search !== '') {
 if ($selectedCategory > 0) {
     $sql .= " AND p.category_id = :category";
     $params['category'] = $selectedCategory;
+}
+
+if ($selectedType !== '') {
+    $sql .= " AND p.product_type = :product_type";
+    $params['product_type'] = $selectedType;
 }
 
 $sql .= " ORDER BY p.product_id DESC";
@@ -1262,7 +1355,121 @@ input[type="file"] {
     font-size: 12px;
 }
 
+/* BEVERAGE TYPE FILTERS */
+
+.beverage-type-section {
+    margin-top: 20px;
+    padding: 18px;
+    background: #fffaf5;
+    border: 1px solid #ead8c7;
+    border-radius: 14px;
+}
+
+.beverage-type-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 13px;
+}
+
+.beverage-type-heading h4 {
+    margin: 0;
+    color: var(--brown);
+    font-size: 13px;
+}
+
+.beverage-type-heading span {
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.beverage-type-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.beverage-type-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 11px;
+    color: var(--brown);
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    text-decoration: none;
+    transition: .2s ease;
+}
+
+.beverage-type-card:hover {
+    border-color: var(--brown-light);
+    transform: translateY(-1px);
+}
+
+.beverage-type-card.active {
+    color: white;
+    background: var(--brown-dark);
+    border-color: var(--brown-dark);
+}
+
+.beverage-type-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 35px;
+    height: 35px;
+    flex-shrink: 0;
+    background: #f2e7db;
+    border-radius: 9px;
+    font-size: 18px;
+}
+
+.beverage-type-card.active .beverage-type-icon {
+    background: rgba(255,255,255,.15);
+}
+
+.beverage-type-info {
+    min-width: 0;
+}
+
+.beverage-type-info strong {
+    display: block;
+    overflow: hidden;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.beverage-type-info small {
+    display: block;
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 9px;
+}
+
+.beverage-type-card.active .beverage-type-info small {
+    color: #ead9c8;
+}
+
+@media (max-width: 1100px) {
+    .beverage-type-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 520px) {
+    .beverage-type-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 /* SEARCH */
+
+
 
 .search-form {
     display: flex;
@@ -1704,6 +1911,25 @@ td {
 @media (max-width: 360px) {
     .nav-menu {
         grid-template-columns: 1fr;
+    }
+}
+
+.add-product-type-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+    align-items: stretch;
+}
+.add-product-type-row input {
+    min-width: 0;
+    flex: 1;
+}
+.add-product-type-row button {
+    white-space: nowrap;
+}
+@media (max-width: 520px) {
+    .add-product-type-row {
+        flex-direction: column;
     }
 }
 </style>
@@ -2149,6 +2375,24 @@ td {
                             <span class="product-type-hint">
                                 Select the type of beverage.
                             </span>
+
+                            <div class="add-product-type-row">
+                                <input
+                                    type="text"
+                                    name="new_product_type"
+                                    maxlength="100"
+                                    placeholder="Add another type (e.g. Lemonade)"
+                                >
+                                <button
+                                    type="submit"
+                                    name="action"
+                                    value="add_type"
+                                    class="secondary-btn"
+                                    formnovalidate
+                                >
+                                    + Add Type
+                                </button>
+                            </div>
                         </div>
 
                         <div class="form-group">
@@ -2335,6 +2579,86 @@ td {
 
             </div>
 
+            <?php if ($selectedCategory === $beveragesCategoryId && $beveragesCategoryId > 0): ?>
+
+                <!-- BEVERAGE PRODUCT TYPE FILTERS -->
+
+                <div class="beverage-type-section">
+                    <div class="beverage-type-heading">
+                        <h4>Choose a Beverage Type</h4>
+                        <span>Filter the products by type</span>
+                    </div>
+
+                    <div class="beverage-type-grid">
+
+                        <?php
+                        $allBeveragesQuery = [
+                            'category' => $beveragesCategoryId
+                        ];
+
+                        if ($search !== '') {
+                            $allBeveragesQuery['search'] = $search;
+                        }
+
+                        if ($statusFilter !== 'all') {
+                            $allBeveragesQuery['status'] = $statusFilter;
+                        }
+                        ?>
+
+                        <a
+                            href="products.php?<?= htmlspecialchars(
+                                http_build_query($allBeveragesQuery),
+                                ENT_QUOTES,
+                                'UTF-8'
+                            ) ?>#category-products"
+                            class="beverage-type-card <?= $selectedType === '' ? 'active' : '' ?>"
+                        >
+                            <span class="beverage-type-icon">🥤</span>
+                            <span class="beverage-type-info">
+                                <strong>All Beverages</strong>
+                                <small><?= number_format($beveragesProductCount) ?> products</small>
+                            </span>
+                        </a>
+
+                        <?php foreach ($beverageTypes as $beverageType): ?>
+
+                            <?php
+                            $typeQuery = [
+                                'category' => $beveragesCategoryId,
+                                'type' => $beverageType
+                            ];
+
+                            if ($search !== '') {
+                                $typeQuery['search'] = $search;
+                            }
+
+                            if ($statusFilter !== 'all') {
+                                $typeQuery['status'] = $statusFilter;
+                            }
+                            ?>
+
+                            <a
+                                href="products.php?<?= htmlspecialchars(
+                                    http_build_query($typeQuery),
+                                    ENT_QUOTES,
+                                    'UTF-8'
+                                ) ?>#category-products"
+                                class="beverage-type-card <?= $selectedType === $beverageType ? 'active' : '' ?>"
+                            >
+                                <span class="beverage-type-icon">🧋</span>
+                                <span class="beverage-type-info">
+                                    <strong><?= htmlspecialchars($beverageType, ENT_QUOTES, 'UTF-8') ?></strong>
+                                    <small><?= number_format($beverageTypeCounts[$beverageType] ?? 0) ?> products</small>
+                                </span>
+                            </a>
+
+                        <?php endforeach; ?>
+
+                    </div>
+                </div>
+
+            <?php endif; ?>
+
             <div class="category-showing">
 
                 <?php if ($selectedCategory > 0): ?>
@@ -2354,7 +2678,10 @@ td {
                     products in
                     <strong>
                         <?= htmlspecialchars($selectedCategoryName, ENT_QUOTES, 'UTF-8') ?>
-                    </strong>.
+                    </strong>
+                    <?php if ($selectedType !== ''): ?>
+                        — <strong><?= htmlspecialchars($selectedType, ENT_QUOTES, 'UTF-8') ?></strong>
+                    <?php endif; ?>.
 
                 <?php else: ?>
 
@@ -2391,6 +2718,16 @@ td {
                     type="hidden"
                     name="category"
                     value="<?= $selectedCategory ?>"
+                >
+
+            <?php endif; ?>
+
+            <?php if ($selectedType !== ''): ?>
+
+                <input
+                    type="hidden"
+                    name="type"
+                    value="<?= htmlspecialchars($selectedType, ENT_QUOTES, 'UTF-8') ?>"
                 >
 
             <?php endif; ?>
