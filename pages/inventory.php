@@ -133,6 +133,41 @@ function getCategoryImageUrl($image)
     return '../uploads/categories/' . rawurlencode($fileName);
 }
 
+
+// PRODUCT IMAGE URL
+function getProductImageUrl($image)
+{
+    if (empty($image)) {
+        return '';
+    }
+
+    $image = str_replace('\\', '/', (string)$image);
+    $fileName = basename($image);
+
+    if ($fileName === '' || $fileName === '.' || $fileName === '..') {
+        return '';
+    }
+
+    return '../uploads/products/' . rawurlencode($fileName);
+}
+
+// BEVERAGE TYPE IMAGE URL
+function getBeverageTypeImageUrl($image)
+{
+    if (empty($image)) {
+        return '';
+    }
+
+    $image = str_replace('\\', '/', (string)$image);
+    $fileName = basename($image);
+
+    if ($fileName === '' || $fileName === '.' || $fileName === '..') {
+        return '';
+    }
+
+    return '../uploads/beverage_types/' . rawurlencode($fileName);
+}
+
 // GET NOTIFICATIONS
 if (isset($_GET['stock_in'])) {
     $message = "Stock added successfully!";
@@ -424,8 +459,20 @@ $totalRegisteredProducts = (int)$conn->query("
 $conn->exec("CREATE TABLE IF NOT EXISTS beverage_product_types (
     type_id INT AUTO_INCREMENT PRIMARY KEY,
     type_name VARCHAR(100) NOT NULL UNIQUE,
+    type_image VARCHAR(255) NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'Active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+// Upgrade older beverage type table structures.
+$beverageTypeColumns = $conn->query("SHOW COLUMNS FROM beverage_product_types")
+    ->fetchAll(PDO::FETCH_COLUMN);
+if (!in_array('type_image', $beverageTypeColumns, true)) {
+    $conn->exec("ALTER TABLE beverage_product_types ADD type_image VARCHAR(255) NULL AFTER type_name");
+}
+if (!in_array('status', $beverageTypeColumns, true)) {
+    $conn->exec("ALTER TABLE beverage_product_types ADD status VARCHAR(20) NOT NULL DEFAULT 'Active' AFTER type_image");
+}
 
 $defaultBeverageTypes = [
     'Softdrinks',
@@ -445,10 +492,19 @@ foreach ($defaultBeverageTypes as $defaultType) {
     $seedTypeStmt->execute([$defaultType]);
 }
 
-$beverageTypeStmt = $conn->query(
-    "SELECT type_name FROM beverage_product_types ORDER BY type_name ASC"
-);
-$beverageTypes = $beverageTypeStmt->fetchAll(PDO::FETCH_COLUMN);
+$beverageTypeStmt = $conn->query("
+    SELECT type_name, type_image
+    FROM beverage_product_types
+    WHERE status = 'Active'
+    ORDER BY type_name ASC
+");
+$beverageTypeRows = $beverageTypeStmt->fetchAll(PDO::FETCH_ASSOC);
+$beverageTypes = array_column($beverageTypeRows, 'type_name');
+$beverageTypeImages = [];
+foreach ($beverageTypeRows as $beverageTypeRow) {
+    $beverageTypeImages[trim($beverageTypeRow['type_name'])] =
+        $beverageTypeRow['type_image'] ?? '';
+}
 
 // GET INVENTORY PRODUCTS
 $inventorySql = "
@@ -1212,7 +1268,7 @@ body {
     font-size: 12px;
 }
 
-/* BEVERAGE TYPE FILTERS */
+/* BEVERAGE TYPE FILTERS — MATCH SALES LAYOUT */
 .beverage-filter-section {
     margin: 18px 0 22px;
     padding: 18px;
@@ -1242,71 +1298,225 @@ body {
 }
 
 .beverage-filter-grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 9px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
 }
 
 .beverage-filter-btn {
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    gap: 7px;
-    padding: 9px 13px;
-    border: 1px solid #e8d8c8;
-    border-radius: 22px;
+    gap: 9px;
+    min-width: 0;
+    padding: 11px 12px;
+    border: 1px solid #eadfd4;
+    border-radius: 11px;
     background: #fff;
-    color: var(--brown);
-    font: inherit;
-    font-size: 11px;
-    font-weight: 700;
+    color: var(--brown-dark);
+    font-family: inherit;
+    text-align: left;
     cursor: pointer;
-    transition: .2s ease;
+    transition: .18s ease;
 }
 
 .beverage-filter-btn:hover {
-    border-color: var(--brown-light);
-    background: #f5eadf;
+    border-color: #b68c66;
+    transform: translateY(-1px);
 }
 
 .beverage-filter-btn.active {
     color: #fff;
-    background: var(--brown-dark);
-    border-color: var(--brown-dark);
+    background: var(--brown);
+    border-color: var(--brown);
+}
+
+.beverage-filter-image {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 35px;
+    height: 35px;
+    flex-shrink: 0;
+    overflow: hidden;
+    border-radius: 9px;
+    background: #f2e7db;
+    font-size: 18px;
+}
+
+.beverage-filter-image img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.beverage-filter-btn.active .beverage-filter-image {
+    background: rgba(255,255,255,.15);
+}
+
+.beverage-filter-info {
+    min-width: 0;
+    flex: 1;
+}
+
+.beverage-filter-name {
+    display: block;
+    overflow: hidden;
+    font-size: 11px;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .beverage-filter-count {
-    display: inline-flex;
-    min-width: 20px;
-    justify-content: center;
-    padding: 2px 5px;
-    border-radius: 12px;
-    background: rgba(128, 87, 53, .12);
-    font-size: 9px;
-}
-
-.beverage-filter-btn.active .beverage-filter-count {
-    background: rgba(255,255,255,.18);
+    display: block;
+    margin-top: 3px;
+    font-size: 10px;
+    opacity: .75;
 }
 
 .inventory-row-hidden {
     display: none !important;
 }
 
-@media (max-width: 620px) {
+@media (max-width: 1100px) {
+    .beverage-filter-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 720px) {
     .beverage-filter-section {
         padding: 14px;
     }
 
     .beverage-filter-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 7px;
     }
 
     .beverage-filter-btn {
-        padding: 8px 10px;
-        font-size: 10px;
+        padding: 9px 10px;
     }
 }
 
+
+/* PRODUCT IMAGE GALLERY */
+.inventory-gallery-section {
+    margin: 18px 0 24px;
+}
+
+.inventory-gallery-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.inventory-gallery-heading h3 {
+    margin: 0;
+    color: var(--brown);
+    font-size: 14px;
+}
+
+.inventory-gallery-heading span {
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.inventory-product-gallery {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 13px;
+}
+
+.inventory-product-card {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: #fff;
+    transition: .2s ease;
+}
+
+.inventory-product-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(55,35,18,.07);
+}
+
+.inventory-product-card-image {
+    width: 100%;
+    height: 125px;
+    overflow: hidden;
+    background: #f8f3ed;
+}
+
+.inventory-product-card-image img {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: cover;
+}
+
+.inventory-image-fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    font-size: 38px;
+    background: #f8f3ed;
+}
+
+.inventory-product-card-details {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 11px;
+}
+
+.inventory-product-card-details strong {
+    overflow: hidden;
+    color: var(--brown-deep);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inventory-product-card-details span {
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.inventory-gallery-stock {
+    color: var(--green) !important;
+    font-weight: 700;
+}
+
+.inventory-gallery-stock.out {
+    color: var(--red) !important;
+}
+
+.inventory-gallery-card-hidden {
+    display: none !important;
+}
+
+@media (max-width: 1100px) {
+    .inventory-product-gallery {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 720px) {
+    .inventory-product-gallery {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .inventory-product-card-image {
+        height: 110px;
+    }
+}
 
 /* BUTTONS */
 
@@ -2312,9 +2522,26 @@ td {
                             class="beverage-filter-btn"
                             data-beverage-filter="<?= e($typeName) ?>"
                         >
-                            <?= e($typeName) ?>
-                            <span class="beverage-filter-count">
-                                <?= number_format((int)$typeCount) ?>
+                            <span class="beverage-filter-image">
+                                <?php $beverageTypeImage = getBeverageTypeImageUrl($beverageTypeImages[$typeName] ?? ''); ?>
+                                <?php if ($beverageTypeImage): ?>
+                                    <img
+                                        src="<?= e($beverageTypeImage) ?>"
+                                        alt="<?= e($typeName) ?>"
+                                        loading="lazy"
+                                        onerror="this.style.display='none';this.parentElement.textContent='🥤';"
+                                    >
+                                <?php else: ?>
+                                    🥤
+                                <?php endif; ?>
+                            </span>
+                            <span class="beverage-filter-info">
+                                <span class="beverage-filter-name">
+                                    <?= e($typeName) ?>
+                                </span>
+                                <span class="beverage-filter-count">
+                                    <?= number_format((int)$typeCount) ?> products
+                                </span>
                             </span>
                         </button>
 
@@ -2325,6 +2552,52 @@ td {
             </section>
 
         <?php endif; ?>
+
+        <!-- INVENTORY PRODUCT IMAGE GALLERY -->
+        <section class="inventory-gallery-section" id="inventoryProductGallery">
+            <div class="inventory-gallery-heading">
+                <h3>Products</h3>
+                <span>Product images from Product Management</span>
+            </div>
+
+            <div class="inventory-product-gallery">
+                <?php foreach ($inventoryProducts as $product): ?>
+                    <?php
+                        $galleryImage = getProductImageUrl($product['product_image'] ?? '');
+                        $galleryStock = (int)($product['quantity'] ?? 0);
+                    ?>
+                    <article
+                        class="inventory-product-card"
+                        data-gallery-product-type="<?= e(trim((string)($product['product_type'] ?? ''))) ?>"
+                    >
+                        <div class="inventory-product-card-image">
+                            <?php if ($galleryImage): ?>
+                                <img
+                                    src="<?= e($galleryImage) ?>"
+                                    alt="<?= e($product['product_name']) ?>"
+                                    loading="lazy"
+                                    onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"
+                                >
+                                <div class="inventory-image-fallback" style="display:none;">
+                                    <?= getCategoryIcon($product['category_name'] ?? '') ?>
+                                </div>
+                            <?php else: ?>
+                                <div class="inventory-image-fallback">
+                                    <?= getCategoryIcon($product['category_name'] ?? '') ?>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                        <div class="inventory-product-card-details">
+                            <strong><?= e($product['product_name']) ?></strong>
+                            <span><?= e($product['product_type'] ?: ($product['category_name'] ?? 'Product')) ?></span>
+                            <span class="inventory-gallery-stock <?= $galleryStock <= 0 ? 'out' : '' ?>">
+                                <?= $galleryStock > 0 ? 'Stock: ' . number_format($galleryStock) : 'Out of Stock' ?>
+                            </span>
+                        </div>
+                    </article>
+                <?php endforeach; ?>
+            </div>
+        </section>
 
         <!-- INVENTORY TABLE HEADER -->
 
@@ -2412,11 +2685,15 @@ td {
                                         <?php if (!empty($product['product_image'])): ?>
 
                                             <img
-                                                src="../uploads/products/<?= rawurlencode(basename($product['product_image'])) ?>"
+                                                src="<?= e(getProductImageUrl($product['product_image'])) ?>"
                                                 class="product-thumbnail"
                                                 alt="<?= e($product['product_name']) ?>"
                                                 loading="lazy"
+                                                onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
                                             >
+                                            <div class="no-product-image" style="display:none;">
+                                                <?= getCategoryIcon($product['category_name'] ?? '') ?>
+                                            </div>
 
                                         <?php else: ?>
 
@@ -3038,6 +3315,9 @@ const beverageFilterButtons = document.querySelectorAll(
 const inventoryProductRows = document.querySelectorAll(
     ".inventory-product-row"
 );
+const inventoryGalleryCards = document.querySelectorAll(
+    ".inventory-product-card"
+);
 
 beverageFilterButtons.forEach(function(button) {
 
@@ -3052,6 +3332,15 @@ beverageFilterButtons.forEach(function(button) {
         this.classList.add("active");
 
         let visibleCount = 0;
+
+        inventoryGalleryCards.forEach(function(card) {
+            const productType = card.dataset.galleryProductType || "";
+            const shouldShow = (
+                selectedType === "all" ||
+                productType.toLowerCase() === selectedType.toLowerCase()
+            );
+            card.classList.toggle("inventory-gallery-card-hidden", !shouldShow);
+        });
 
         inventoryProductRows.forEach(function(row) {
 
@@ -3086,6 +3375,18 @@ beverageFilterButtons.forEach(function(button) {
                 selectedType === "all"
                     ? "<?= e($selectedCategoryName) ?> Inventory"
                     : selectedType + " Inventory"
+            );
+        }
+
+        const galleryHeading = document.querySelector(
+            ".inventory-gallery-heading h3"
+        );
+
+        if (galleryHeading) {
+            galleryHeading.textContent = (
+                selectedType === "all"
+                    ? "Products"
+                    : selectedType + " Products"
             );
         }
 

@@ -51,8 +51,20 @@ $editProduct = null;
 $conn->exec("CREATE TABLE IF NOT EXISTS beverage_product_types (
     type_id INT AUTO_INCREMENT PRIMARY KEY,
     type_name VARCHAR(100) NOT NULL UNIQUE,
+    type_image VARCHAR(255) NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'Active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+// Safely upgrade the table created by earlier versions of this page.
+$typeColumns = $conn->query("SHOW COLUMNS FROM beverage_product_types")
+    ->fetchAll(PDO::FETCH_COLUMN);
+if (!in_array('type_image', $typeColumns, true)) {
+    $conn->exec("ALTER TABLE beverage_product_types ADD type_image VARCHAR(255) NULL AFTER type_name");
+}
+if (!in_array('status', $typeColumns, true)) {
+    $conn->exec("ALTER TABLE beverage_product_types ADD status VARCHAR(20) NOT NULL DEFAULT 'Active' AFTER type_image");
+}
 
 $defaultBeverageTypes = [
     'Softdrinks',
@@ -69,33 +81,112 @@ foreach ($defaultBeverageTypes as $defaultType) {
     $seedTypeStmt->execute([$defaultType]);
 }
 
-$beverageTypeStmt = $conn->query("SELECT type_name FROM beverage_product_types ORDER BY type_name ASC");
-$beverageTypes = $beverageTypeStmt->fetchAll(PDO::FETCH_COLUMN);
+// Beverage-type image uploads are stored separately from product images.
+$beverageTypeUploadDirectory = __DIR__ . '/../uploads/beverage_types/';
+$beverageTypeUploadUrl = '../uploads/beverage_types/';
+$maxFileSize = 5 * 1024 * 1024;
+if (!is_dir($beverageTypeUploadDirectory)) {
+    mkdir($beverageTypeUploadDirectory, 0755, true);
+}
 
-// ADD A NEW BEVERAGE TYPE
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_type') {
-    $newType = trim($_POST['new_product_type'] ?? '');
-
-    if ($newType === '' || mb_strlen($newType) > 100) {
-        header('Location: products.php?type_error=invalid');
-        exit;
+function uploadBeverageTypeImage($file, $directory, $maxFileSize)
+{
+    if (!isset($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+        return null;
     }
+    if (($file['error'] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK) {
+        throw new Exception('Beverage type image upload failed.');
+    }
+    if (($file['size'] ?? 0) > $maxFileSize) {
+        throw new Exception('Image must not exceed 5MB.');
+    }
+    $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'];
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mime = $finfo->file($file['tmp_name']);
+    if (!isset($allowed[$mime]) || @getimagesize($file['tmp_name']) === false) {
+        throw new Exception('Only valid JPG, PNG, or WEBP images are allowed.');
+    }
+    $filename = bin2hex(random_bytes(16)) . '.' . $allowed[$mime];
+    if (!move_uploaded_file($file['tmp_name'], $directory . $filename)) {
+        throw new Exception('Unable to save beverage type image.');
+    }
+    return $filename;
+}
 
+function deleteBeverageTypeImage($filename, $directory)
+{
+    if (!$filename) return;
+    $path = $directory . basename($filename);
+    if (is_file($path)) @unlink($path);
+}
+
+// ADD / EDIT / ARCHIVE BEVERAGE TYPES
+$typeAction = $_POST['action'] ?? '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($typeAction, ['add_type', 'update_type', 'archive_type'], true)) {
     try {
-        $addTypeStmt = $conn->prepare(
-            "INSERT INTO beverage_product_types (type_name) VALUES (?)"
-        );
-        $addTypeStmt->execute([$newType]);
-        header('Location: products.php?type_added=1');
-        exit;
+        if ($typeAction === 'add_type') {
+            $newType = trim($_POST['new_product_type'] ?? '');
+            if ($newType === '' || mb_strlen($newType) > 100) {
+                throw new Exception('Please enter a beverage type with 1–100 characters.');
+            }
+            $newImage = uploadBeverageTypeImage($_FILES['type_image'] ?? null, $beverageTypeUploadDirectory, $maxFileSize);
+            $insertType = $conn->prepare("INSERT INTO beverage_product_types (type_name, type_image, status) VALUES (?, ?, 'Active')");
+            $insertType->execute([$newType, $newImage]);
+            header('Location: products.php?type_added=1');
+            exit;
+        }
+
+        $typeId = (int)($_POST['type_id'] ?? 0);
+        if ($typeId <= 0) throw new Exception('Invalid beverage type.');
+
+        if ($typeAction === 'update_type') {
+            $updatedName = trim($_POST['type_name'] ?? '');
+            if ($updatedName === '' || mb_strlen($updatedName) > 100) {
+                throw new Exception('Beverage type name must be 1–100 characters.');
+            }
+            $currentStmt = $conn->prepare("SELECT type_image FROM beverage_product_types WHERE type_id = ?");
+            $currentStmt->execute([$typeId]);
+            $currentType = $currentStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$currentType) throw new Exception('Beverage type not found.');
+
+            $newImage = uploadBeverageTypeImage($_FILES['type_image'] ?? null, $beverageTypeUploadDirectory, $maxFileSize);
+            $imageToSave = $newImage ?: $currentType['type_image'];
+            $updateType = $conn->prepare("UPDATE beverage_product_types SET type_name = ?, type_image = ? WHERE type_id = ?");
+            $updateType->execute([$updatedName, $imageToSave, $typeId]);
+
+            // Keep product_type text in sync when the type name is changed.
+            if ($updatedName !== ($_POST['old_type_name'] ?? '')) {
+                $syncProducts = $conn->prepare("UPDATE products SET product_type = ? WHERE product_type = ?");
+                $syncProducts->execute([$updatedName, $_POST['old_type_name'] ?? '']);
+            }
+            if ($newImage && !empty($currentType['type_image'])) {
+                deleteBeverageTypeImage($currentType['type_image'], $beverageTypeUploadDirectory);
+            }
+            header('Location: products.php?type_updated=1');
+            exit;
+        }
+
+        if ($typeAction === 'archive_type') {
+            $archiveType = $conn->prepare("UPDATE beverage_product_types SET status = 'Inactive' WHERE type_id = ?");
+            $archiveType->execute([$typeId]);
+            header('Location: products.php?type_archived=1');
+            exit;
+        }
     } catch (PDOException $e) {
         if ($e->getCode() === '23000') {
             header('Location: products.php?type_error=exists');
             exit;
         }
         throw $e;
+    } catch (Exception $e) {
+        header('Location: products.php?type_error=invalid&detail=' . urlencode($e->getMessage()));
+        exit;
     }
 }
+
+$beverageTypeStmt = $conn->query("SELECT type_id, type_name, type_image, status FROM beverage_product_types WHERE status = 'Active' ORDER BY type_name ASC");
+$beverageTypeRows = $beverageTypeStmt->fetchAll(PDO::FETCH_ASSOC);
+$beverageTypes = array_column($beverageTypeRows, 'type_name');
 
 // IMAGE UPLOAD SETTINGS
 $uploadDirectory = __DIR__ . '/../uploads/products/';
@@ -227,11 +318,15 @@ function isBeveragesCategory($categoryName)
 
 // NOTIFICATIONS
 if (isset($_GET['type_added'])) {
-    $message = "Beverage product type added successfully!";
+    $message = "Beverage type added successfully!";
+} elseif (isset($_GET['type_updated'])) {
+    $message = "Beverage type updated successfully!";
+} elseif (isset($_GET['type_archived'])) {
+    $message = "Beverage type archived successfully. Existing products were retained.";
 } elseif (isset($_GET['type_error'])) {
     $message = $_GET['type_error'] === 'exists'
-        ? "That product type already exists."
-        : "Please enter a product type with 1–100 characters.";
+        ? "That beverage type already exists."
+        : ($_GET['detail'] ?? "Please enter a valid beverage type.");
     $messageType = 'error';
 } elseif (isset($_GET['added'])) {
     $message = "Product added successfully!";
@@ -1426,6 +1521,14 @@ input[type="file"] {
     background: #f2e7db;
     border-radius: 9px;
     font-size: 18px;
+    overflow: hidden;
+}
+
+.beverage-type-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
 }
 
 .beverage-type-card.active .beverage-type-icon {
@@ -1914,6 +2017,191 @@ td {
     }
 }
 
+
+.beverage-type-management {
+    margin: 16px 0;
+    padding: 14px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+}
+.beverage-type-management h5 {
+    margin: 0 0 10px;
+    color: var(--brown-dark);
+    font-size: 12px;
+}
+.type-management-add {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: end;
+    margin-bottom: 12px;
+}
+.type-management-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+.type-management-item {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #fffdfb;
+}
+.type-management-image {
+    width: 48px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: 8px;
+    background: #f2e7db;
+}
+.type-management-image.placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+}
+.type-management-form { min-width: 0; }
+.type-management-form input[type="text"] { margin-bottom: 6px; }
+.type-management-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+}
+.type-management-actions button {
+    padding: 6px 9px;
+    font-size: 10px;
+}
+.type-archive-btn {
+    background: #f8e9e5 !important;
+    color: #9a3e2f !important;
+    border: 1px solid #ebc9c0 !important;
+}
+@media (max-width: 700px) {
+    .type-management-add, .type-management-list { grid-template-columns: 1fr; }
+}
+
+/* BEVERAGE TYPE EDIT MODAL */
+.type-management-item {
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    align-items: center;
+}
+.type-management-info {
+    min-width: 0;
+}
+.type-management-info strong {
+    display: block;
+    color: var(--brown-dark);
+    font-size: 11px;
+    overflow-wrap: anywhere;
+}
+.type-management-info small {
+    display: block;
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 9px;
+}
+.type-management-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+.type-edit-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    background: rgba(35, 24, 16, .58);
+}
+.type-edit-modal.show {
+    display: flex;
+}
+.type-edit-dialog {
+    width: min(100%, 480px);
+    max-height: 90vh;
+    overflow-y: auto;
+    padding: 22px;
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.25);
+}
+.type-edit-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 18px;
+}
+.type-edit-header h3 {
+    margin: 0;
+    color: var(--brown-dark);
+    font-size: 16px;
+}
+.type-edit-header p {
+    margin: 5px 0 0;
+    color: var(--muted);
+    font-size: 10px;
+}
+.type-edit-close {
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: 8px;
+    background: #f2e7db;
+    color: var(--brown);
+    font-size: 20px;
+    cursor: pointer;
+}
+.type-edit-preview-wrap {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 12px 0 16px;
+}
+.type-edit-preview {
+    width: 100px;
+    height: 100px;
+    flex: 0 0 100px;
+    object-fit: cover;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: #f2e7db;
+}
+.type-edit-preview.placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 35px;
+}
+.type-edit-preview-caption {
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.6;
+}
+.type-edit-dialog .form-group {
+    margin-bottom: 14px;
+}
+.type-edit-dialog .form-actions {
+    justify-content: flex-end;
+    margin-top: 20px;
+}
+@media (max-width: 700px) {
+    .type-management-item {
+        grid-template-columns: 48px minmax(0, 1fr);
+    }
+    .type-management-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-start;
+    }
+}
 .add-product-type-row {
     display: flex;
     gap: 8px;
@@ -2376,23 +2664,6 @@ td {
                                 Select the type of beverage.
                             </span>
 
-                            <div class="add-product-type-row">
-                                <input
-                                    type="text"
-                                    name="new_product_type"
-                                    maxlength="100"
-                                    placeholder="Add another type (e.g. Lemonade)"
-                                >
-                                <button
-                                    type="submit"
-                                    name="action"
-                                    value="add_type"
-                                    class="secondary-btn"
-                                    formnovalidate
-                                >
-                                    + Add Type
-                                </button>
-                            </div>
                         </div>
 
                         <div class="form-group">
@@ -2589,6 +2860,103 @@ td {
                         <span>Filter the products by type</span>
                     </div>
 
+                    <?php if ($isAdmin): ?>
+                        <div class="beverage-type-management">
+                            <h5>Manage Beverage Types</h5>
+                            <form method="POST" enctype="multipart/form-data" class="type-management-add">
+                                <input type="hidden" name="action" value="add_type">
+                                <div class="form-group">
+                                    <label>Beverage Type Name</label>
+                                    <input type="text" name="new_product_type" maxlength="100" placeholder="e.g. Lemonade" required>
+                                </div>
+                                <div class="form-group">
+                                    <label>Type Image (optional)</label>
+                                    <input type="file" name="type_image" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp">
+                                    <span class="form-hint">JPG, PNG, WEBP. Max 5MB.</span>
+                                </div>
+                                <button type="submit" class="secondary-btn">+ Add Type</button>
+                            </form>
+                            <div class="type-management-list">
+                                <?php foreach ($beverageTypeRows as $managedType): ?>
+                                    <?php
+                                        $managedImageExists = !empty($managedType['type_image'])
+                                            && is_file($beverageTypeUploadDirectory . basename($managedType['type_image']));
+                                        $managedImageUrl = $managedImageExists
+                                            ? $beverageTypeUploadUrl . rawurlencode($managedType['type_image'])
+                                            : '';
+                                    ?>
+                                    <div class="type-management-item">
+                                        <?php if ($managedImageExists): ?>
+                                            <img class="type-management-image" src="<?= htmlspecialchars($managedImageUrl, ENT_QUOTES, 'UTF-8') ?>" alt="">
+                                        <?php else: ?>
+                                            <div class="type-management-image placeholder">🧋</div>
+                                        <?php endif; ?>
+                                        <div class="type-management-info">
+                                            <strong><?= htmlspecialchars($managedType['type_name'], ENT_QUOTES, 'UTF-8') ?></strong>
+                                            <small><?= $managedImageExists ? 'Image added' : 'No image uploaded' ?></small>
+                                        </div>
+                                        <div class="type-management-actions">
+                                            <button
+                                                type="button"
+                                                class="btn edit-btn"
+                                                onclick="openBeverageTypeModal(<?= (int)$managedType['type_id'] ?>)"
+                                            >Edit</button>
+                                            <form method="POST" onsubmit="return confirm('Archive this beverage type? Existing products will remain.');">
+                                                <input type="hidden" name="action" value="archive_type">
+                                                <input type="hidden" name="type_id" value="<?= (int)$managedType['type_id'] ?>">
+                                                <button type="submit" class="btn type-archive-btn">Archive</button>
+                                            </form>
+                                        </div>
+                                    </div>
+
+                                    <div class="type-edit-modal" id="beverageTypeModal<?= (int)$managedType['type_id'] ?>" aria-hidden="true">
+                                        <div class="type-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="beverageTypeTitle<?= (int)$managedType['type_id'] ?>">
+                                            <div class="type-edit-header">
+                                                <div>
+                                                    <h3 id="beverageTypeTitle<?= (int)$managedType['type_id'] ?>">Edit Beverage Type</h3>
+                                                    <p>Update the type name or replace its image.</p>
+                                                </div>
+                                                <button type="button" class="type-edit-close" aria-label="Close" onclick="closeBeverageTypeModal(<?= (int)$managedType['type_id'] ?>)">&times;</button>
+                                            </div>
+                                            <form method="POST" enctype="multipart/form-data" class="beverage-type-edit-form">
+                                                <input type="hidden" name="action" value="update_type">
+                                                <input type="hidden" name="type_id" value="<?= (int)$managedType['type_id'] ?>">
+                                                <input type="hidden" name="old_type_name" value="<?= htmlspecialchars($managedType['type_name'], ENT_QUOTES, 'UTF-8') ?>">
+                                                <div class="form-group">
+                                                    <label for="typeName<?= (int)$managedType['type_id'] ?>">Beverage Type Name</label>
+                                                    <input id="typeName<?= (int)$managedType['type_id'] ?>" type="text" name="type_name" value="<?= htmlspecialchars($managedType['type_name'], ENT_QUOTES, 'UTF-8') ?>" maxlength="100" required>
+                                                </div>
+                                                <div class="type-edit-preview-wrap">
+                                                    <?php if ($managedImageExists): ?>
+                                                        <img class="type-edit-preview" id="typePreview<?= (int)$managedType['type_id'] ?>" src="<?= htmlspecialchars($managedImageUrl, ENT_QUOTES, 'UTF-8') ?>" alt="Current beverage type image">
+                                                    <?php else: ?>
+                                                        <div class="type-edit-preview placeholder" id="typePreview<?= (int)$managedType['type_id'] ?>">🧋</div>
+                                                    <?php endif; ?>
+                                                    <div class="type-edit-preview-caption">Current image or selected replacement will appear here.</div>
+                                                </div>
+                                                <div class="form-group">
+                                                    <label for="typeImage<?= (int)$managedType['type_id'] ?>">Change Type Image</label>
+                                                    <input
+                                                        id="typeImage<?= (int)$managedType['type_id'] ?>"
+                                                        type="file"
+                                                        name="type_image"
+                                                        accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                                                        onchange="previewBeverageTypeImage(this, <?= (int)$managedType['type_id'] ?>)"
+                                                    >
+                                                    <span class="form-hint">JPG, PNG, or WEBP. Maximum 5MB. Leave blank to keep the current image.</span>
+                                                </div>
+                                                <div class="form-actions">
+                                                    <button type="button" class="btn cancel-btn" onclick="closeBeverageTypeModal(<?= (int)$managedType['type_id'] ?>)">Cancel</button>
+                                                    <button type="submit" class="btn primary-btn">Save Changes</button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+
                     <div class="beverage-type-grid">
 
                         <?php
@@ -2645,7 +3013,22 @@ td {
                                 ) ?>#category-products"
                                 class="beverage-type-card <?= $selectedType === $beverageType ? 'active' : '' ?>"
                             >
-                                <span class="beverage-type-icon">🧋</span>
+                                <span class="beverage-type-icon">
+                                    <?php
+                                    $typeImageRow = null;
+                                    foreach ($beverageTypeRows as $typeRow) {
+                                        if ($typeRow['type_name'] === $beverageType) {
+                                            $typeImageRow = $typeRow;
+                                            break;
+                                        }
+                                    }
+                                    ?>
+                                    <?php if (!empty($typeImageRow['type_image']) && is_file($beverageTypeUploadDirectory . basename($typeImageRow['type_image']))): ?>
+                                        <img src="<?= htmlspecialchars($beverageTypeUploadUrl . rawurlencode($typeImageRow['type_image']), ENT_QUOTES, 'UTF-8') ?>" alt="<?= htmlspecialchars($beverageType, ENT_QUOTES, 'UTF-8') ?>">
+                                    <?php else: ?>
+                                        🧋
+                                    <?php endif; ?>
+                                </span>
                                 <span class="beverage-type-info">
                                     <strong><?= htmlspecialchars($beverageType, ENT_QUOTES, 'UTF-8') ?></strong>
                                     <small><?= number_format($beverageTypeCounts[$beverageType] ?? 0) ?> products</small>
@@ -2939,6 +3322,75 @@ td {
 </main>
 
 <script>
+// BEVERAGE TYPE EDIT MODALS
+function openBeverageTypeModal(typeId) {
+    const modal = document.getElementById('beverageTypeModal' + typeId);
+    if (!modal) return;
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeBeverageTypeModal(typeId) {
+    const modal = document.getElementById('beverageTypeModal' + typeId);
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+    document.body.style.overflow = '';
+}
+
+function previewBeverageTypeImage(input, typeId) {
+    const preview = document.getElementById('typePreview' + typeId);
+    const file = input.files && input.files[0];
+    if (!preview || !file) return;
+
+    if (!file.type.startsWith('image/')) {
+        input.value = '';
+        alert('Please select a valid image file.');
+        return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+        input.value = '';
+        alert('Image must not exceed 5MB.');
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function (event) {
+        if (preview.tagName.toLowerCase() !== 'img') {
+            const image = document.createElement('img');
+            image.id = preview.id;
+            image.className = 'type-edit-preview';
+            image.alt = 'Selected beverage type image preview';
+            preview.replaceWith(image);
+        }
+        const updatedPreview = document.getElementById('typePreview' + typeId);
+        updatedPreview.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+}
+
+// Close the modal when clicking the backdrop or pressing Escape.
+document.querySelectorAll('.type-edit-modal').forEach(function (modal) {
+    modal.addEventListener('click', function (event) {
+        if (event.target === modal) {
+            modal.classList.remove('show');
+            modal.setAttribute('aria-hidden', 'true');
+            document.body.style.overflow = '';
+        }
+    });
+});
+
+document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') {
+        document.querySelectorAll('.type-edit-modal.show').forEach(function (modal) {
+            modal.classList.remove('show');
+            modal.setAttribute('aria-hidden', 'true');
+        });
+        document.body.style.overflow = '';
+    }
+});
 // AUTO-HIDE NOTIFICATION
 
 const message = document.getElementById("productMessage");

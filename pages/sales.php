@@ -85,6 +85,21 @@
     }
 
     $uploadUrl = '../uploads/products/';
+    function getProductImageUrl($image) {
+        if (empty($image)) return '';
+        $image = str_replace('\\', '/', (string)$image);
+        $fileName = basename($image);
+        if ($fileName === '' || $fileName === '.' || $fileName === '..') return '';
+        return '../uploads/products/' . rawurlencode($fileName);
+    }
+
+    function getBeverageTypeImageUrl($image) {
+        if (empty($image)) return '';
+        $image = str_replace('\\', '/', (string)$image);
+        $fileName = basename($image);
+        if ($fileName === '' || $fileName === '.' || $fileName === '..') return '';
+        return '../uploads/beverage_types/' . rawurlencode($fileName);
+    }
     function getCategoryIcon($categoryName) {
         $name = strtolower((string)$categoryName);
         if (strpos($name, 'bread') !== false) return '🍞';
@@ -100,13 +115,40 @@
     $conn->exec("CREATE TABLE IF NOT EXISTS beverage_product_types (
         type_id INT AUTO_INCREMENT PRIMARY KEY,
         type_name VARCHAR(100) NOT NULL UNIQUE,
+        type_image VARCHAR(255) NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'Active',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    // Upgrade older table versions without affecting existing type records.
+    $beverageTypeColumns = $conn->query("SHOW COLUMNS FROM beverage_product_types")
+        ->fetchAll(PDO::FETCH_COLUMN);
+    if (!in_array('type_image', $beverageTypeColumns, true)) {
+        $conn->exec("ALTER TABLE beverage_product_types ADD type_image VARCHAR(255) NULL AFTER type_name");
+    }
+    if (!in_array('status', $beverageTypeColumns, true)) {
+        $conn->exec("ALTER TABLE beverage_product_types ADD status VARCHAR(20) NOT NULL DEFAULT 'Active' AFTER type_image");
+    }
+
     $defaultBeverageTypes = ['Softdrinks', 'Water', 'Juice', 'Ice Coffee', 'Shake', 'Coffee', 'Milk Tea'];
     $seedTypeStmt = $conn->prepare("INSERT IGNORE INTO beverage_product_types (type_name) VALUES (?)");
-    foreach ($defaultBeverageTypes as $defaultType) { $seedTypeStmt->execute([$defaultType]); }
-    $beverageTypeStmt = $conn->query("SELECT type_name FROM beverage_product_types ORDER BY type_name ASC");
-    $beverageTypes = $beverageTypeStmt->fetchAll(PDO::FETCH_COLUMN);
+    foreach ($defaultBeverageTypes as $defaultType) {
+        $seedTypeStmt->execute([$defaultType]);
+    }
+
+    $beverageTypeStmt = $conn->query("
+        SELECT type_name, type_image
+        FROM beverage_product_types
+        WHERE status = 'Active'
+        ORDER BY type_name ASC
+    ");
+    $beverageTypeRows = $beverageTypeStmt->fetchAll(PDO::FETCH_ASSOC);
+    $beverageTypes = array_column($beverageTypeRows, 'type_name');
+    $beverageTypeImages = [];
+    foreach ($beverageTypeRows as $beverageTypeRow) {
+        $beverageTypeImages[trim($beverageTypeRow['type_name'])] =
+            $beverageTypeRow['type_image'] ?? '';
+    }
 
     $categoryStmt = $conn->query('SELECT category_id, category_name, category_image FROM categories ORDER BY category_name ASC');
     $categories = $categoryStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -764,7 +806,25 @@ transform:translateY(-1px)
 color:#fff
 }
 .beverage-type-icon {
-font-size:20px
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    width:35px;
+    height:35px;
+    flex-shrink:0;
+    background:#f2e7db;
+    border-radius:9px;
+    font-size:18px;
+    overflow:hidden;
+}
+.beverage-type-icon img {
+    display:block;
+    width:100%;
+    height:100%;
+    object-fit:cover;
+}
+.beverage-type-card.active .beverage-type-icon {
+    background:rgba(255,255,255,.15);
 }
 .beverage-type-info {
     min-width:0;
@@ -1465,7 +1525,12 @@ font-size:19px
 <?php $beverageIcons=['Softdrinks'=>'🥤','Water'=>'💧','Juice'=>'🧃','Ice Coffee'=>'🧋','Shake'=>'🥛','Coffee'=>'☕','Milk Tea'=>'🧋']; foreach($beverageTypes as $type): ?>
 <button type="button" class="beverage-type-card" data-beverage-type="<?= h($type) ?>">
 <span class="beverage-type-icon">
+<?php $beverageTypeImage = getBeverageTypeImageUrl($beverageTypeImages[$type] ?? ''); ?>
+<?php if ($beverageTypeImage): ?>
+<img src="<?= h($beverageTypeImage) ?>" alt="<?= h($type) ?>" loading="lazy" onerror="this.style.display='none';this.parentElement.textContent='<?= h($beverageIcons[$type] ?? '🥤') ?>';">
+<?php else: ?>
 <?= h($beverageIcons[$type] ?? '🥤') ?>
+<?php endif; ?>
 </span>
 <span class="beverage-type-info">
 <span class="beverage-type-name">
@@ -1484,7 +1549,7 @@ font-size:19px
 <span>Single-click to select | Double-click to preview</span>
 </div>
 <div class="product-grid" id="productGrid">
-<?php foreach($products as $product): $stock=(int)$product['stock']; $productImage=!empty($product['product_image'])?$uploadUrl.rawurlencode($product['product_image']):''; ?>
+<?php foreach($products as $product): $stock=(int)$product['stock']; $productImage=getProductImageUrl($product['product_image'] ?? ''); ?>
 <button type="button" class="product-card <?= $stock<=0?'out-of-stock':'' ?>" data-product-id="<?= (int)$product['product_id'] ?>" data-category-id="<?= (int)($product['category_id']??0) ?>" data-category-name="<?= h($product['category_name']??'Uncategorized') ?>" data-product-type="<?= h($product['product_type']??'') ?>" data-product-name="<?= h($product['product_name']) ?>" data-product-price="<?= h($product['price']) ?>" data-product-category="<?= h($product['category_name']??'Uncategorized') ?>" data-product-image="<?= h($productImage) ?>" data-product-stock="<?= $stock ?>" aria-label="<?= h($product['product_name']) ?>. Double-click to preview.">
 <span class="product-card-image-wrap">
 <?php if($productImage): ?>
